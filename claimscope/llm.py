@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -13,7 +13,7 @@ class OpenAICompatibleClient:
     The API key is read from the environment and is never logged or stored.
     """
 
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str
     model: str
 

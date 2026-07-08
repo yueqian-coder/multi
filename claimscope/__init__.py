@@ -10,6 +10,7 @@ from .models import (
     Paper,
 )
 from .pipeline import ClaimScopePipeline
+from .planner import HeuristicClaimPlanner, LLMClaimPlanner
 from .retrievers import StaticPaperRetriever
 
 __all__ = [
@@ -18,7 +19,9 @@ __all__ = [
     "ClaimScopePipeline",
     "ClaimVariant",
     "EvidenceItem",
+    "HeuristicClaimPlanner",
     "IdeaOpportunity",
+    "LLMClaimPlanner",
     "NegativeEvidence",
     "Paper",
     "StaticPaperRetriever",

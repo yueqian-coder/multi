@@ -99,6 +99,12 @@ Use online academic search:
 python -m claimscope.cli "RAG can reliably reduce hallucination in LLM-generated answers" --online
 ```
 
+Use the LLM planner for domain-specific claim variants and assumption queries:
+
+```powershell
+python -m claimscope.cli "Diffusion models improve MRI tumor segmentation with limited labels" --online --planner llm
+```
+
 Online mode uses public arXiv and Semantic Scholar APIs. A Semantic Scholar API
 key is optional and only raises rate limits.
 
@@ -112,9 +118,13 @@ $env:OPENAI_API_KEY="your-key"
 $env:MODEL_NAME="your-model"
 ```
 
-The current core pipeline runs without an LLM key. The OpenAI-compatible client
-is included so later agents can use your gateway without changing the project
-structure.
+The core pipeline runs without an LLM key through the deterministic heuristic
+planner. When the environment variables above are present, the LLM planner can
+turn fuzzy research directions into domain-specific claim variants, hidden
+assumptions, and support / contradiction / limitation / null-result queries.
+Selecting the LLM planner sends the input direction to your configured endpoint.
+If the LLM call fails or the response is invalid, ClaimScope reports the fallback
+and uses the heuristic planner.
 
 ## Verification
 
@@ -127,6 +137,7 @@ python -m pytest -q
 Current tests cover the core pre-ideation pipeline:
 
 - mapping assumptions to traceable evidence
+- using an optional LLM planner with heuristic fallback
 - mining negative evidence
 - generating actionable idea opportunities
 - exporting a Markdown report with the required sections

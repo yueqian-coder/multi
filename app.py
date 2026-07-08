@@ -3,7 +3,9 @@ from __future__ import annotations
 import streamlit as st
 
 from claimscope.cli import DEMO_PAPERS
+from claimscope.llm import OpenAICompatibleClient
 from claimscope.pipeline import ClaimScopePipeline
+from claimscope.planner import HeuristicClaimPlanner, LLMClaimPlanner
 from claimscope.retrievers import (
     ArxivRetriever,
     CombinedRetriever,
@@ -20,6 +22,22 @@ st.caption(
 )
 
 with st.sidebar:
+    st.header("Planning")
+    llm_client = OpenAICompatibleClient.from_env()
+    planner_options = ["Heuristic planner"]
+    if llm_client:
+        planner_options.append("LLM planner")
+    planner_mode = st.radio(
+        "Claim planner",
+        planner_options,
+        index=0,
+        help="The LLM planner creates domain-specific claim variants and assumption queries.",
+    )
+    if llm_client:
+        st.caption("LLM planner is available; selecting it sends the input direction to your configured endpoint.")
+    else:
+        st.caption("Set OPENAI_API_KEY and OPENAI_BASE_URL to enable the LLM planner.")
+
     st.header("Retrieval")
     mode = st.radio(
         "Paper source",
@@ -46,8 +64,19 @@ if st.button("Analyze", type="primary"):
     else:
         retriever = StaticPaperRetriever(DEMO_PAPERS)
 
+    planner = HeuristicClaimPlanner()
+    if planner_mode == "LLM planner" and llm_client:
+        planner = LLMClaimPlanner(llm_client=llm_client)
+
     with st.spinner("Mapping claim variants, assumptions, and negative evidence..."):
-        report = ClaimScopePipeline(retriever=retriever).analyze(claim, limit=limit)
+        report = ClaimScopePipeline(retriever=retriever, planner=planner).analyze(
+            claim, limit=limit
+        )
+    if isinstance(planner, LLMClaimPlanner):
+        if planner.used_planner == "heuristic":
+            st.warning(planner.fallback_reason)
+        else:
+            st.info("LLM planner used for claim variants and assumption queries.")
 
     overview, papers, assumptions, negative, opportunities, markdown_tab = st.tabs(
         [

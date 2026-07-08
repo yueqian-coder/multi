@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .models import (
     AnalysisReport,
@@ -10,6 +10,13 @@ from .models import (
     IdeaOpportunity,
     NegativeEvidence,
     Paper,
+)
+from .planner import (
+    ClaimPlanner,
+    HeuristicClaimPlanner,
+    LLMClaimPlanner,
+    PlannedAssumption,
+    PlannedClaimVariant,
 )
 from .retrievers import PaperRetriever
 from .text_utils import keywords, overlap_score, split_sentences, truncate
@@ -61,23 +68,28 @@ NEGATIVE_MARKERS = (
 @dataclass
 class ClaimScopePipeline:
     retriever: PaperRetriever
+    planner: ClaimPlanner = field(default_factory=HeuristicClaimPlanner)
+
+    @classmethod
+    def from_env(cls, retriever: PaperRetriever) -> "ClaimScopePipeline":
+        from .llm import OpenAICompatibleClient
+
+        llm_client = OpenAICompatibleClient.from_env()
+        if llm_client:
+            planner: ClaimPlanner = LLMClaimPlanner(llm_client=llm_client)
+        else:
+            planner = HeuristicClaimPlanner()
+        return cls(retriever=retriever, planner=planner)
 
     def analyze(self, query: str, limit: int = 20) -> AnalysisReport:
-        claim = _normalize_claim(query)
-        plan = _build_assumption_plan(claim)
+        plan = self.planner.build(query)
+        claim = plan.claim
         retrieval_queries = [claim]
-        for item in plan:
-            retrieval_queries.extend(
-                [
-                    item["support_query"],
-                    item["contradict_query"],
-                    item["limitation_query"],
-                    item["null_result_query"],
-                ]
-            )
+        for item in plan.assumptions:
+            retrieval_queries.extend(item.retrieval_queries)
         papers = _targeted_search(self.retriever, retrieval_queries, claim, limit)
-        variants = _build_claim_variants(claim, papers)
-        assumptions = _build_assumptions(plan, papers)
+        variants = _build_claim_variants(plan.claim_variants, claim, papers)
+        assumptions = _build_assumptions(plan.assumptions, papers)
         negative_evidence = _mine_negative_evidence(papers)
         opportunities = _build_idea_opportunities(assumptions, negative_evidence)
         return AnalysisReport(
@@ -91,82 +103,27 @@ class ClaimScopePipeline:
         )
 
 
-def _normalize_claim(query: str) -> str:
-    return query.strip().rstrip(".。")
-
-
-def _build_claim_variants(claim: str, papers: list[Paper]) -> list[ClaimVariant]:
-    evidence = _collect_evidence(claim, papers, max_items=3)
-    topic = _readable_topic(claim)
-    variants = [
-        ClaimVariant(
-            text=claim,
-            rationale="Original user claim; serves as the anchor for lineage tracking.",
-            evidence=evidence,
-        ),
-        ClaimVariant(
-            text=f"Boundary condition: the claim holds only under specific task, dataset, and retrieval-quality conditions",
-            rationale="Boundary-condition variant; useful for avoiding overclaiming.",
-            evidence=_collect_evidence("condition quality dataset task", papers, 3),
-        ),
-        ClaimVariant(
-            text=f"Failure variant: the claim can break when evidence is noisy, mismatched, or under-specified",
-            rationale="Negative-evidence variant; surfaces limitations before ideation.",
-            evidence=_collect_evidence("fail noisy mismatch limitation", papers, 3),
-        ),
-    ]
-    return variants
-
-
-def _build_assumption_plan(claim: str) -> list[dict[str, str]]:
-    topic = _readable_topic(claim)
+def _build_claim_variants(
+    plan: list[PlannedClaimVariant], claim: str, papers: list[Paper]
+) -> list[ClaimVariant]:
     return [
-        {
-            "text": f"The claimed improvement is real for the target setting: {topic}.",
-            "support_query": f"{topic} improvement performance evidence",
-            "contradict_query": f"{topic} no improvement worse contradict",
-            "limitation_query": f"{topic} limitation boundary condition failure",
-            "null_result_query": f"{topic} null result no consistent improvement",
-        },
-        {
-            "text": "The required evidence or context is available and high-quality enough.",
-            "support_query": f"{topic} relevant evidence context quality",
-            "contradict_query": f"{topic} irrelevant evidence noisy retrieval mismatch",
-            "limitation_query": f"{topic} evidence quality limitation noise",
-            "null_result_query": f"{topic} retrieval noise no improvement",
-        },
-        {
-            "text": "The evaluation metric faithfully measures the claimed improvement.",
-            "support_query": f"{topic} metric evaluation benchmark validity",
-            "contradict_query": f"{topic} metric mismatch unreliable evaluation",
-            "limitation_query": f"{topic} brittle metrics citation mismatch limitation",
-            "null_result_query": f"{topic} evaluation no consistent improvement",
-        },
-        {
-            "text": "The effect generalizes beyond the narrow datasets and domains used in prior work.",
-            "support_query": f"{topic} generalization multiple datasets domains",
-            "contradict_query": f"{topic} domain shift fails robustness",
-            "limitation_query": f"{topic} narrow dataset domain limitation",
-            "null_result_query": f"{topic} domain shift no improvement",
-        },
+        ClaimVariant(
+            text=item.text,
+            rationale=item.rationale,
+            evidence=_collect_evidence(
+                item.evidence_query or f"{claim} {item.text}", papers, max_items=3
+            ),
+        )
+        for item in plan
     ]
 
 
 def _build_assumptions(
-    plan: list[dict[str, str]], papers: list[Paper]
+    plan: list[PlannedAssumption], papers: list[Paper]
 ) -> list[Assumption]:
     assumptions: list[Assumption] = []
     for item in plan:
-        evidence = _collect_evidence(
-            [
-                item["support_query"],
-                item["contradict_query"],
-                item["limitation_query"],
-                item["null_result_query"],
-            ],
-            papers,
-            max_items=5,
-        )
+        evidence = _collect_evidence(item.retrieval_queries, papers, max_items=5)
         support = sum(1 for item in evidence if item.stance == "support")
         negative = sum(1 for item in evidence if item.stance in {"limit", "contradict"})
         if support and negative:
@@ -183,14 +140,14 @@ def _build_assumptions(
             risk = "high"
         assumptions.append(
             Assumption(
-                text=item["text"],
+                text=item.text,
                 status=status,
                 evidence=evidence,
                 risk=risk,
-                support_query=item["support_query"],
-                contradict_query=item["contradict_query"],
-                limitation_query=item["limitation_query"],
-                null_result_query=item["null_result_query"],
+                support_query=item.support_query,
+                contradict_query=item.contradict_query,
+                limitation_query=item.limitation_query,
+                null_result_query=item.null_result_query,
             )
         )
     return assumptions
@@ -349,14 +306,6 @@ def _sentence_stance(sentence: str) -> str:
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
     lower = text.lower()
     return any(marker in lower for marker in markers)
-
-
-def _readable_topic(claim: str) -> str:
-    compact = claim.strip().rstrip(".。")
-    if len(compact) <= 110:
-        return compact
-    claim_terms = keywords(compact, 6)
-    return " ".join(claim_terms[:4]) if claim_terms else compact[:110]
 
 
 def _relevance_score(claim: str, paper: Paper) -> float:

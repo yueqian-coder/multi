@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from .models import Paper
 from .pipeline import ClaimScopePipeline
+from .planner import HeuristicClaimPlanner, LLMClaimPlanner
+from .llm import OpenAICompatibleClient
 from .retrievers import ArxivRetriever, CombinedRetriever, SemanticScholarRetriever, StaticPaperRetriever
 
 
@@ -57,13 +60,34 @@ def main() -> None:
     )
     parser.add_argument("--limit", type=int, default=12)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--planner",
+        choices=["heuristic", "llm"],
+        default="heuristic",
+        help="Use the deterministic planner or an env-configured OpenAI-compatible LLM planner.",
+    )
     args = parser.parse_args()
 
     if args.online:
         retriever = CombinedRetriever([SemanticScholarRetriever(), ArxivRetriever()])
     else:
         retriever = StaticPaperRetriever(DEMO_PAPERS)
-    report = ClaimScopePipeline(retriever=retriever).analyze(args.claim, limit=args.limit)
+    planner = HeuristicClaimPlanner()
+    if args.planner == "llm":
+        llm_client = OpenAICompatibleClient.from_env()
+        if llm_client:
+            planner = LLMClaimPlanner(llm_client=llm_client)
+        else:
+            print(
+                "LLM planner requested but OPENAI_API_KEY or OPENAI_BASE_URL is not set; "
+                "falling back to heuristic planner.",
+                file=sys.stderr,
+            )
+    report = ClaimScopePipeline(retriever=retriever, planner=planner).analyze(
+        args.claim, limit=args.limit
+    )
+    if isinstance(planner, LLMClaimPlanner) and planner.used_planner == "heuristic":
+        print(planner.fallback_reason, file=sys.stderr)
     markdown = report.to_markdown()
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
