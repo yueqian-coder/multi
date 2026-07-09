@@ -140,7 +140,7 @@ def _extract_expected_effect(claim: str) -> str:
 def _extract_conditions(claim: str) -> list[str]:
     conditions: list[str] = []
     for marker in _CONDITION_MARKERS:
-        match = re.search(rf"\s{re.escape(marker)}\s", claim, re.IGNORECASE)
+        match = _condition_marker_match(claim, marker)
         if match is None:
             continue
         prefix = claim[: match.start()]
@@ -158,13 +158,16 @@ def _effect_match(claim: str) -> re.Match[str] | None:
 
 def _strip_conditions(text: str) -> str:
     stripped = text.strip()
-    lower = stripped.lower()
     for marker in _CONDITION_MARKERS:
-        token = f" {marker} "
-        if token not in lower:
+        match = _condition_marker_match(stripped, marker)
+        if match is None:
             continue
-        return stripped.split(token, 1)[0].strip()
+        return stripped[: match.start()].strip()
     return stripped
+
+
+def _condition_marker_match(text: str, marker: str) -> re.Match[str] | None:
+    return re.search(rf"\s{re.escape(marker)}\s", text, re.IGNORECASE)
 
 
 def _looks_like_method(text: str) -> bool:

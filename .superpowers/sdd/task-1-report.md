@@ -172,3 +172,56 @@ Result: `22 passed`
 
 - `_extract_conditions()` now finds condition markers with a case-insensitive regex and slices the original claim text, preserving the original condition casing in the returned condition text.
 - `LLMClaimPlanner.extract_core_claim_result()` now threads the fallback claim into `_extract_core_claim()` so fallback computation is not duplicated during core-claim extraction.
+
+## Second Review Follow-Up: Mixed-Case Condition Stripping
+
+Review feedback identified one remaining leak: `_strip_conditions()` still detected lowercase markers but split the original text case-sensitively, so mixed-case markers like `With` could remain in `target_or_task` and `expected_effect`.
+
+### Second Follow-Up TDD Evidence
+
+Extended regression test:
+
+- `test_heuristic_core_claim_extracts_mixed_case_condition_markers`
+
+Red run:
+
+```powershell
+python -m pytest tests/test_core_claim.py -q
+```
+
+Observed failure:
+
+```text
+FAILED tests/test_core_claim.py::test_heuristic_core_claim_extracts_mixed_case_condition_markers
+E   AssertionError: assert 'segmentation With expert prompts' == 'segmentation'
+```
+
+Green run:
+
+```powershell
+python -m pytest tests/test_core_claim.py -q
+```
+
+Result: `5 passed`
+
+Required regression run:
+
+```powershell
+python -m pytest tests/test_core_claim.py tests/test_pipeline.py -q
+```
+
+Result: `22 passed`
+
+Full suite rerun:
+
+```powershell
+python -m pytest -q
+```
+
+Result: `22 passed`
+
+### Second Follow-Up Implementation
+
+- `_strip_conditions()` now uses the same case-insensitive marker-location logic as `_extract_conditions()`.
+- Added `_condition_marker_match()` so both paths share one marker-matching rule and preserve the original pre-condition text when stripping.
+- The mixed-case regression now asserts that condition text is captured in `conditions` and does not leak into `target_or_task` or `expected_effect`.

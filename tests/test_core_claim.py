@@ -73,11 +73,13 @@ def test_claim_candidate_clamps_confidence_and_scores_deterministically():
 def test_heuristic_core_claim_extracts_mixed_case_condition_markers():
     HeuristicCoreClaimEngine = _load_core_claim_engine()
     result = HeuristicCoreClaimEngine().run(
-        "use an error map loop for segmentation With expert prompts"
+        "use an error map loop to improve segmentation With expert prompts"
     )
 
     assert result.selected_candidate is not None
     assert result.selected_candidate.conditions == ["expert prompts"]
+    assert result.selected_candidate.target_or_task == "segmentation"
+    assert result.selected_candidate.expected_effect == "improve segmentation"
 
 
 def test_planners_expose_typed_core_claim_results_without_breaking_string_api():
