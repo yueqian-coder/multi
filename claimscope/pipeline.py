@@ -102,6 +102,12 @@ class ClaimScopePipeline:
             idea_opportunities=opportunities,
         )
 
+    def extract_core_claim(self, query: str) -> str:
+        extractor = getattr(self.planner, "extract_core_claim", None)
+        if extractor:
+            return extractor(query)
+        return self.planner.build(query).claim
+
 
 def _build_claim_variants(
     plan: list[PlannedClaimVariant], claim: str, papers: list[Paper]

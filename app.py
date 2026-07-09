@@ -335,6 +335,12 @@ with st.sidebar:
     else:
         st.warning("API planner not configured")
         st.caption("Set OPENAI_API_KEY and OPENAI_BASE_URL to enable LLM planning.")
+    workflow_mode = st.radio(
+        "Test module",
+        ["Core Claim Test", "Full Discovery"],
+        index=0,
+        help="Core Claim Test runs only Research Direction -> Core Claim.",
+    )
 
     st.markdown("### Retrieval")
     mode = st.radio(
@@ -369,21 +375,73 @@ claim = st.text_area(
     height=105,
 )
 
-analyze = st.button("Run Discovery", type="primary", use_container_width=True)
+button_label = "Extract Core Claim" if workflow_mode == "Core Claim Test" else "Run Discovery"
+analyze = st.button(button_label, type="primary", use_container_width=True)
 
 if analyze:
     if not claim.strip():
         st.warning("Enter a research direction or claim first.")
         st.stop()
 
+    planner = HeuristicClaimPlanner()
+    if planner_mode == "LLM planner" and llm_client:
+        planner = LLMClaimPlanner(llm_client=llm_client)
+
+    if workflow_mode == "Core Claim Test":
+        with st.spinner("Extracting core claim only..."):
+            core_claim = ClaimScopePipeline(
+                retriever=StaticPaperRetriever([]),
+                planner=planner,
+            ).extract_core_claim(claim)
+
+        if isinstance(planner, LLMClaimPlanner):
+            if planner.used_planner == "heuristic":
+                st.warning(planner.fallback_reason)
+            else:
+                st.info("LLM Core Claim module used. Downstream modules did not run.")
+
+        st.markdown(
+            f"""
+            <div class="callout">
+                <div class="small-label">Input Research Direction</div>
+                <div class="body-copy">{escape(claim)}</div>
+            </div>
+            <div class="callout">
+                <div class="small-label">Core Claim</div>
+                <div class="body-copy">{escape(core_claim)}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("#### Module Test Status")
+        st.table(
+            [
+                {"Module": "Research Direction", "Status": "ran", "Output": claim},
+                {"Module": "Core Claim", "Status": "ran", "Output": core_claim},
+                {"Module": "Claim Variants / Boundary Conditions", "Status": "off", "Output": ""},
+                {"Module": "Hidden Assumptions", "Status": "off", "Output": ""},
+                {"Module": "Evidence Queries", "Status": "off", "Output": ""},
+                {"Module": "Evidence Cards", "Status": "off", "Output": ""},
+                {"Module": "Idea Opportunities", "Status": "off", "Output": ""},
+            ]
+        )
+        st.markdown("#### Your Evaluation")
+        st.code(
+            "Input:\n"
+            f"{claim}\n\n"
+            "Observed Core Claim:\n"
+            f"{core_claim}\n\n"
+            "Expected Core Claim:\n\n"
+            "Pass / Partial / Fail:\n\n"
+            "Notes:\n",
+            language="text",
+        )
+        st.stop()
+
     if mode == "arXiv + Semantic Scholar":
         retriever = CombinedRetriever([SemanticScholarRetriever(), ArxivRetriever()])
     else:
         retriever = StaticPaperRetriever(DEMO_PAPERS)
-
-    planner = HeuristicClaimPlanner()
-    if planner_mode == "LLM planner" and llm_client:
-        planner = LLMClaimPlanner(llm_client=llm_client)
 
     with st.spinner("Running assumption-centric discovery workflow..."):
         report = ClaimScopePipeline(retriever=retriever, planner=planner).analyze(
@@ -484,8 +542,8 @@ else:
     st.markdown(
         """
         <div class="callout">
-            <div class="small-label">Workflow</div>
-            <div class="body-copy">Research Direction -> Core Claim -> Claim Variants -> Hidden Assumptions -> Evidence Queries -> Evidence Cards -> Idea Opportunities</div>
+            <div class="small-label">Current Test Mode</div>
+            <div class="body-copy">Start with Core Claim Test. It runs only Research Direction -> Core Claim; downstream modules stay off until you switch to Full Discovery.</div>
         </div>
         """,
         unsafe_allow_html=True,

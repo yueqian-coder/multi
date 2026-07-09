@@ -54,6 +54,21 @@ def build_report():
     )
 
 
+class ExplodingRetriever:
+    def search(self, query: str, limit: int = 20):
+        raise AssertionError("Core Claim tests must not call paper retrieval.")
+
+
+def test_extract_core_claim_does_not_run_retrieval_or_downstream_modules():
+    pipeline = ClaimScopePipeline(retriever=ExplodingRetriever())
+
+    claim = pipeline.extract_core_claim(
+        "  RAG can reliably reduce hallucination in LLM-generated answers. "
+    )
+
+    assert claim == "RAG can reliably reduce hallucination in LLM-generated answers"
+
+
 def test_pipeline_maps_assumptions_to_traceable_evidence_and_negative_findings():
     report = build_report()
 
@@ -211,6 +226,26 @@ class FakeLLMClient:
 class FailingLLMClient:
     def chat(self, messages, temperature=0.2):
         raise RuntimeError("gateway unavailable")
+
+
+def test_llm_core_claim_extraction_accepts_core_claim_only_json():
+    planner = LLMClaimPlanner(
+        llm_client=FakeLLMClient(
+            '{"normalized_claim": "Error maps can guide lightweight refinement for promptable medical segmentation"}'
+        ),
+        fallback=HeuristicClaimPlanner(),
+    )
+
+    claim = ClaimScopePipeline(
+        retriever=ExplodingRetriever(),
+        planner=planner,
+    ).extract_core_claim("use error map + loop to improve promptable medical segmentation")
+
+    assert claim == (
+        "Error maps can guide lightweight refinement for promptable medical segmentation"
+    )
+    assert planner.used_planner == "llm"
+    assert planner.llm_client.calls[0]["temperature"] == 0.1
 
 
 def test_llm_planner_supplies_domain_specific_claim_variants_and_assumptions():

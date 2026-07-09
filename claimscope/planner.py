@@ -46,8 +46,11 @@ class ClaimPlanner(Protocol):
 
 @dataclass
 class HeuristicClaimPlanner:
+    def extract_core_claim(self, query: str) -> str:
+        return normalize_claim(query)
+
     def build(self, query: str) -> ClaimPlan:
-        claim = normalize_claim(query)
+        claim = self.extract_core_claim(query)
         topic = _readable_topic(claim)
         return ClaimPlan(
             claim=claim,
@@ -121,6 +124,26 @@ class LLMClaimPlanner:
     used_planner: str = field(default="llm", init=False)
     fallback_reason: str = field(default="", init=False)
 
+    def extract_core_claim(self, query: str) -> str:
+        fallback_claim = self.fallback.extract_core_claim(query)
+        try:
+            content = self.llm_client.chat(_core_claim_messages(query), temperature=0.1)
+            payload = _extract_json_object(content)
+            claim = normalize_claim(_coerce_text(payload.get("normalized_claim")))
+            if not claim:
+                raise ValueError("missing normalized_claim")
+            self.used_planner = "llm"
+            self.fallback_reason = ""
+            return claim
+        except ValueError as exc:
+            self.used_planner = "heuristic"
+            self.fallback_reason = f"Invalid LLM core-claim response: {exc}"
+            return fallback_claim
+        except Exception:
+            self.used_planner = "heuristic"
+            self.fallback_reason = "LLM core-claim extraction failed; using heuristic planner."
+            return fallback_claim
+
     def build(self, query: str) -> ClaimPlan:
         fallback_plan = self.fallback.build(query)
         try:
@@ -155,6 +178,31 @@ def normalize_claim(query: str) -> str:
 
 class PlannerShapeError(ValueError):
     pass
+
+
+def _core_claim_messages(query: str) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are ClaimScope's Core Claim module. Convert a fuzzy research "
+                "direction into one specific, testable, falsifiable core claim. "
+                "Return JSON only. Do not generate variants, assumptions, evidence "
+                "queries, citations, or prose."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                "Input direction:\n"
+                f"{query}\n\n"
+                "Return this exact JSON shape:\n"
+                '{"normalized_claim": "one concrete testable research claim"}\n\n'
+                "A good core claim names the method or mechanism, target task or "
+                "object, expected effect, and key condition when available."
+            ),
+        },
+    ]
 
 
 def _planner_messages(query: str) -> list[dict[str, str]]:
