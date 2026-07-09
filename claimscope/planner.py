@@ -4,7 +4,12 @@ import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from .core_claim import HeuristicCoreClaimEngine, with_selected_claim
+from .core_claim import (
+    CoreClaimArena,
+    HeuristicCoreClaimEngine,
+    PROPOSER_ROLES,
+    with_selected_claim,
+)
 from .models import CoreClaimResult
 from .text_utils import keywords
 
@@ -136,6 +141,22 @@ class LLMClaimPlanner:
     fallback_reason: str = field(default="", init=False)
 
     def extract_core_claim_result(self, query: str) -> CoreClaimResult:
+        try:
+            arena_result = CoreClaimArena(self.llm_client).run(query)
+            if any(
+                candidate.proposer in PROPOSER_ROLES
+                for candidate in arena_result.candidates
+            ):
+                self.used_planner = "multi_agent"
+                self.fallback_reason = (
+                    "Multi-agent arena used deterministic fallback."
+                    if arena_result.degraded
+                    else ""
+                )
+                return arena_result
+        except Exception:
+            pass
+
         fallback_result = self._fallback_core_claim_result(query)
         claim = self._extract_core_claim(
             query,

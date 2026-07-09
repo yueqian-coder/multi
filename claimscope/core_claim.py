@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from time import perf_counter
 
-from .models import AgentEvent, ClaimCandidate, CoreClaimResult
+from .models import AgentEvent, ClaimCandidate, ClaimCritique, CoreClaimResult
 
 _EFFECT_VERBS = (
     "improve",
@@ -27,6 +29,47 @@ _EFFECT_VERBS = (
     "helped",
 )
 _CONDITION_MARKERS = ("with", "under", "when", "if", "across", "during")
+PROPOSER_ROLES = {
+    "operationalizer": (
+        "Turn the direction into measurable variables and a controlled comparison."
+    ),
+    "mechanism_analyst": (
+        "State the mechanism, target, expected effect, and boundary conditions."
+    ),
+    "skeptical_empiricist": (
+        "Write the narrowest claim that an adverse result could falsify."
+    ),
+}
+CRITIC_ROLES = {
+    "falsifiability_critic": (
+        "Check whether each candidate can be falsified by an observable result."
+    ),
+    "scope_critic": "Check whether each candidate has an appropriately bounded scope.",
+}
+RUBRIC_KEYS = (
+    "specificity",
+    "falsifiability",
+    "mechanism",
+    "scope",
+    "measurability",
+    "risk_awareness",
+)
+_CANDIDATE_SCHEMA = (
+    '{"claim": "testable claim", "method_or_mechanism": "mechanism", '
+    '"target_or_task": "task", "expected_effect": "measurable effect", '
+    '"conditions": ["condition"], "falsification_test": "test", '
+    '"missing_information": ["missing field"], "confidence": 0.0}'
+)
+_CRITIQUE_SCHEMA = (
+    '{"critiques": [{"candidate_id": "proposer id", "rubric_scores": {'
+    '"specificity": 0, "falsifiability": 0, "mechanism": 0, "scope": 0, '
+    '"measurability": 0, "risk_awareness": 0}, "reason_codes": ["code"], '
+    '"revision": "stronger public claim"}]}'
+)
+_JUDGE_SCHEMA = (
+    '{"selected_candidate_id": "proposer id", "final_claim": "final claim", '
+    '"falsification_test": "test", "unresolved_ambiguities": ["ambiguity"]}'
+)
 
 
 class HeuristicCoreClaimEngine:
@@ -59,6 +102,190 @@ class HeuristicCoreClaimEngine:
             mode="heuristic",
             degraded=False,
         )
+
+
+class CoreClaimArena:
+    def __init__(self, llm_client: object, max_workers: int = 3, timeout: float = 60):
+        self.llm_client = llm_client
+        self.max_workers = max(1, min(3, int(max_workers)))
+        self.timeout = timeout
+
+    def run(self, direction: str) -> CoreClaimResult:
+        candidates, proposer_events = self._run_proposers(direction)
+        if not candidates:
+            fallback = HeuristicCoreClaimEngine().run(direction)
+            return replace(
+                fallback,
+                events=proposer_events + fallback.events,
+                mode="multi_agent",
+                degraded=True,
+            )
+
+        critiques: list[ClaimCritique] = []
+        critic_events: list[AgentEvent] = []
+        for role, rubric in CRITIC_ROLES.items():
+            critique, event = self._run_critic(direction, role, rubric, candidates)
+            critiques.extend(critique)
+            critic_events.append(event)
+
+        selected_candidate, final_claim, ambiguities, judge_event, degraded = (
+            self._run_judge(direction, candidates, critiques)
+        )
+        return CoreClaimResult(
+            direction=direction,
+            selected_claim=final_claim,
+            selected_candidate=selected_candidate,
+            candidates=candidates,
+            critiques=critiques,
+            events=proposer_events + critic_events + [judge_event],
+            unresolved_ambiguities=ambiguities,
+            mode="multi_agent",
+            degraded=degraded,
+        )
+
+    def _run_proposers(
+        self, direction: str
+    ) -> tuple[list[ClaimCandidate], list[AgentEvent]]:
+        candidates_by_role: dict[str, ClaimCandidate] = {}
+        events_by_role: dict[str, AgentEvent] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {
+                executor.submit(self._run_proposer, direction, role, rubric): role
+                for role, rubric in PROPOSER_ROLES.items()
+            }
+            for future in as_completed(futures):
+                role = futures[future]
+                try:
+                    candidate, event = future.result()
+                except Exception:
+                    candidate = None
+                    event = _event(
+                        role=role,
+                        status="failed",
+                        public_summary="The proposer did not return a usable public claim.",
+                        started=perf_counter(),
+                        artifacts={},
+                    )
+                if candidate is not None:
+                    candidates_by_role[role] = candidate
+                events_by_role[role] = event
+        return (
+            [
+                candidates_by_role[role]
+                for role in PROPOSER_ROLES
+                if role in candidates_by_role
+            ],
+            [events_by_role[role] for role in PROPOSER_ROLES if role in events_by_role],
+        )
+
+    def _run_proposer(
+        self, direction: str, role: str, rubric: str
+    ) -> tuple[ClaimCandidate, AgentEvent]:
+        started = perf_counter()
+        content = self.llm_client.chat(
+            _proposer_messages(direction, role, rubric),
+            temperature=0.2,
+            timeout=self.timeout,
+        )
+        payload = _extract_json_object(content)
+        candidate = _payload_to_candidate(payload, proposer=role)
+        return candidate, _event(
+            role=role,
+            status="complete",
+            public_summary="Proposed one public core-claim candidate.",
+            started=started,
+            artifacts={"candidate_id": role},
+            scores={"candidate_score": candidate.score()},
+        )
+
+    def _run_critic(
+        self,
+        direction: str,
+        role: str,
+        rubric: str,
+        candidates: list[ClaimCandidate],
+    ) -> tuple[list[ClaimCritique], AgentEvent]:
+        started = perf_counter()
+        try:
+            content = self.llm_client.chat(
+                _critic_messages(direction, role, rubric, candidates),
+                temperature=0.1,
+                timeout=self.timeout,
+            )
+            payload = _extract_json_object(content)
+            critiques = _payload_to_critiques(payload, critic=role)
+            return critiques, _event(
+                role=role,
+                status="complete",
+                public_summary="Critiqued public candidates against the rubric.",
+                started=started,
+                artifacts={"critique_count": len(critiques)},
+            )
+        except Exception:
+            return [], _event(
+                role=role,
+                status="failed",
+                public_summary="The critic did not return usable public critique data.",
+                started=started,
+                artifacts={},
+            )
+
+    def _run_judge(
+        self,
+        direction: str,
+        candidates: list[ClaimCandidate],
+        critiques: list[ClaimCritique],
+    ) -> tuple[ClaimCandidate, str, list[str], AgentEvent, bool]:
+        started = perf_counter()
+        try:
+            content = self.llm_client.chat(
+                _judge_messages(direction, candidates, critiques),
+                temperature=0.0,
+                timeout=self.timeout,
+            )
+            payload = _extract_json_object(content)
+            selected = _candidate_by_id(
+                candidates, _coerce_text(payload.get("selected_candidate_id"))
+            )
+            final_claim = _coerce_text(payload.get("final_claim")) or selected.claim
+            falsification_test = _coerce_text(payload.get("falsification_test"))
+            selected = replace(
+                selected,
+                claim=final_claim,
+                falsification_test=falsification_test or selected.falsification_test,
+            )
+            ambiguities = _coerce_string_list(payload.get("unresolved_ambiguities"))
+            return (
+                selected,
+                final_claim,
+                ambiguities,
+                _event(
+                    role="judge",
+                    status="complete",
+                    public_summary="Selected the final public core claim.",
+                    started=started,
+                    artifacts={"selected_candidate_id": selected.proposer},
+                ),
+                False,
+            )
+        except Exception:
+            selected = _fallback_candidate(candidates)
+            return (
+                selected,
+                selected.claim,
+                list(selected.missing_information),
+                _event(
+                    role="judge",
+                    status="degraded",
+                    public_summary=(
+                        "Judge selection failed; used deterministic fallback."
+                    ),
+                    started=started,
+                    artifacts={"selected_candidate_id": selected.proposer},
+                    scores={"selected_candidate": selected.score()},
+                ),
+                True,
+            )
 
 
 def with_selected_claim(result: CoreClaimResult, claim: str, *, mode: str) -> CoreClaimResult:
@@ -183,3 +410,240 @@ def _looks_like_method(text: str) -> bool:
             "adding ",
         )
     ) or bool(_effect_match(text))
+
+
+def _proposer_messages(direction: str, role: str, rubric: str) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"You are the {role} proposer in ClaimScope's public core-claim arena. "
+                f"{rubric} Return JSON only. Do not include chain-of-thought, private "
+                "reasoning, credentials, markdown, citations, or prose."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Direction:\n{direction}\n\n"
+                "Return exactly this JSON schema:\n"
+                f"{_CANDIDATE_SCHEMA}"
+            ),
+        },
+    ]
+
+
+def _critic_messages(
+    direction: str,
+    role: str,
+    rubric: str,
+    candidates: list[ClaimCandidate],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"You are the {role} critic in ClaimScope's public core-claim arena. "
+                f"{rubric} Score each candidate from 0 to 5 on the six public rubric "
+                "keys. Return JSON only. Do not include chain-of-thought, private "
+                "reasoning, credentials, markdown, citations, or prose."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Direction:\n{direction}\n\n"
+                "Candidates:\n"
+                f"{json.dumps(_candidate_payloads(candidates), sort_keys=True)}\n\n"
+                "Return exactly this JSON schema:\n"
+                f"{_CRITIQUE_SCHEMA}"
+            ),
+        },
+    ]
+
+
+def _judge_messages(
+    direction: str,
+    candidates: list[ClaimCandidate],
+    critiques: list[ClaimCritique],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the judge in ClaimScope's public core-claim arena. Select the "
+                "best candidate using only the structured public candidates and public "
+                "critiques. Return JSON only. Do not include chain-of-thought, private "
+                "reasoning, credentials, markdown, citations, or prose."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Direction:\n{direction}\n\n"
+                "Candidates:\n"
+                f"{json.dumps(_candidate_payloads(candidates), sort_keys=True)}\n\n"
+                "Critiques:\n"
+                f"{json.dumps([item.to_dict() for item in critiques], sort_keys=True)}\n\n"
+                "Return exactly this JSON schema:\n"
+                f"{_JUDGE_SCHEMA}"
+            ),
+        },
+    ]
+
+
+def _candidate_payloads(candidates: list[ClaimCandidate]) -> list[dict[str, object]]:
+    return [
+        {
+            "candidate_id": candidate.proposer,
+            "claim": candidate.claim,
+            "method_or_mechanism": candidate.method_or_mechanism,
+            "target_or_task": candidate.target_or_task,
+            "expected_effect": candidate.expected_effect,
+            "conditions": candidate.conditions,
+            "falsification_test": candidate.falsification_test,
+            "missing_information": candidate.missing_information,
+            "confidence": candidate.confidence,
+            "score": candidate.score(),
+        }
+        for candidate in candidates
+    ]
+
+
+def _payload_to_candidate(payload: dict, proposer: str) -> ClaimCandidate:
+    claim = _coerce_text(payload.get("claim"))
+    if not claim:
+        raise ValueError("missing claim")
+    return ClaimCandidate(
+        claim=claim,
+        method_or_mechanism=_coerce_text(payload.get("method_or_mechanism")),
+        target_or_task=_coerce_text(payload.get("target_or_task")),
+        expected_effect=_coerce_text(payload.get("expected_effect")),
+        conditions=_coerce_string_list(payload.get("conditions")),
+        falsification_test=(
+            _coerce_text(payload.get("falsification_test"))
+            or (
+                "Compare the stated outcome against a baseline under the stated "
+                "condition."
+            )
+        ),
+        missing_information=_coerce_string_list(payload.get("missing_information")),
+        confidence=_coerce_float(payload.get("confidence"), default=0.0),
+        proposer=proposer,
+    )
+
+
+def _payload_to_critiques(payload: dict, critic: str) -> list[ClaimCritique]:
+    raw_critiques = payload.get("critiques")
+    if not isinstance(raw_critiques, list):
+        return []
+    critiques: list[ClaimCritique] = []
+    for item in raw_critiques:
+        if not isinstance(item, dict):
+            continue
+        candidate_id = _coerce_text(item.get("candidate_id"))
+        if not candidate_id:
+            continue
+        critiques.append(
+            ClaimCritique(
+                candidate_id=candidate_id,
+                critic=critic,
+                rubric_scores=_rubric_scores(item.get("rubric_scores")),
+                reason_codes=_coerce_string_list(item.get("reason_codes")),
+                revision=_coerce_text(item.get("revision")),
+                public_summary=_coerce_text(item.get("public_summary")),
+            )
+        )
+    return critiques
+
+
+def _rubric_scores(raw_scores: object) -> dict[str, float]:
+    if not isinstance(raw_scores, dict):
+        return {}
+    return {
+        key: max(0.0, min(5.0, _coerce_float(raw_scores.get(key), default=0.0)))
+        for key in RUBRIC_KEYS
+    }
+
+
+def _extract_json_object(content: str) -> dict:
+    start = content.find("{")
+    if start < 0:
+        raise ValueError("response did not contain a JSON object")
+    in_string = False
+    escaped = False
+    depth = 0
+    for index in range(start, len(content)):
+        char = content[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                payload = json.loads(content[start : index + 1])
+                if not isinstance(payload, dict):
+                    raise ValueError("response JSON must be an object")
+                return payload
+    raise ValueError("response did not contain a complete JSON object")
+
+
+def _candidate_by_id(
+    candidates: list[ClaimCandidate], candidate_id: str
+) -> ClaimCandidate:
+    for candidate in candidates:
+        if candidate.proposer == candidate_id:
+            return candidate
+    return _fallback_candidate(candidates)
+
+
+def _fallback_candidate(candidates: list[ClaimCandidate]) -> ClaimCandidate:
+    return max(candidates, key=lambda candidate: candidate.score())
+
+
+def _event(
+    *,
+    role: str,
+    status: str,
+    public_summary: str,
+    started: float,
+    artifacts: dict[str, object],
+    scores: dict[str, float] | None = None,
+) -> AgentEvent:
+    return AgentEvent(
+        stage="core_claim",
+        role=role,
+        status=status,
+        public_summary=public_summary,
+        duration_ms=max(0, round((perf_counter() - started) * 1000)),
+        artifacts=artifacts,
+        scores=scores or {},
+    )
+
+
+def _coerce_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [text for item in value if (text := _coerce_text(item))]
+
+
+def _coerce_text(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())
+
+
+def _coerce_float(value: object, *, default: float) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return default

@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+
+
+class OpenAICompatibleClientError(RuntimeError):
+    pass
 
 
 @dataclass
@@ -16,6 +21,7 @@ class OpenAICompatibleClient:
     api_key: str = field(repr=False)
     base_url: str
     model: str
+    timeout: float = 60
 
     @classmethod
     def from_env(cls) -> "OpenAICompatibleClient | None":
@@ -29,7 +35,12 @@ class OpenAICompatibleClient:
             model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
         )
 
-    def chat(self, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+        timeout: float | None = None,
+    ) -> str:
         endpoint = self.base_url.rstrip("/") + "/chat/completions"
         payload = json.dumps(
             {
@@ -47,6 +58,26 @@ class OpenAICompatibleClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        return result["choices"][0]["message"]["content"]
+        request_timeout = self.timeout if timeout is None else timeout
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=request_timeout
+                ) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                return result["choices"][0]["message"]["content"]
+            except urllib.error.HTTPError as exc:
+                if attempt == 0 and _is_retryable_http_status(exc.code):
+                    continue
+                raise OpenAICompatibleClientError(
+                    f"LLM chat request failed with HTTP {exc.code}."
+                ) from None
+            except Exception as exc:
+                raise OpenAICompatibleClientError(
+                    f"LLM chat request failed with {exc.__class__.__name__}."
+                ) from None
+        raise OpenAICompatibleClientError("LLM chat request failed.")
+
+
+def _is_retryable_http_status(status: int) -> bool:
+    return status == 429 or 500 <= status <= 599
