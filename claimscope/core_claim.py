@@ -138,13 +138,13 @@ def _extract_expected_effect(claim: str) -> str:
 
 
 def _extract_conditions(claim: str) -> list[str]:
-    lower = claim.lower()
     conditions: list[str] = []
     for marker in _CONDITION_MARKERS:
-        token = f" {marker} "
-        if token not in lower:
+        match = re.search(rf"\s{re.escape(marker)}\s", claim, re.IGNORECASE)
+        if match is None:
             continue
-        prefix, suffix = claim.split(token, 1)
+        prefix = claim[: match.start()]
+        suffix = claim[match.end() :]
         if _looks_like_method(prefix):
             conditions.append(suffix.strip())
     return conditions

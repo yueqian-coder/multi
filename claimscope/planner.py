@@ -137,7 +137,10 @@ class LLMClaimPlanner:
 
     def extract_core_claim_result(self, query: str) -> CoreClaimResult:
         fallback_result = self._fallback_core_claim_result(query)
-        claim = self._extract_core_claim(query)
+        claim = self._extract_core_claim(
+            query,
+            fallback_claim=fallback_result.selected_claim,
+        )
         if claim == fallback_result.selected_claim:
             return fallback_result
         return with_selected_claim(fallback_result, claim, mode=self.used_planner)
@@ -145,8 +148,7 @@ class LLMClaimPlanner:
     def extract_core_claim(self, query: str) -> str:
         return self.extract_core_claim_result(query).selected_claim
 
-    def _extract_core_claim(self, query: str) -> str:
-        fallback_claim = self.fallback.extract_core_claim(query)
+    def _extract_core_claim(self, query: str, *, fallback_claim: str) -> str:
         try:
             content = self.llm_client.chat(_core_claim_messages(query), temperature=0.1)
             payload = _extract_json_object(content)

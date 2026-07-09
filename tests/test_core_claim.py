@@ -70,6 +70,16 @@ def test_claim_candidate_clamps_confidence_and_scores_deterministically():
     assert candidate.score() == 70.0
 
 
+def test_heuristic_core_claim_extracts_mixed_case_condition_markers():
+    HeuristicCoreClaimEngine = _load_core_claim_engine()
+    result = HeuristicCoreClaimEngine().run(
+        "use an error map loop for segmentation With expert prompts"
+    )
+
+    assert result.selected_candidate is not None
+    assert result.selected_candidate.conditions == ["expert prompts"]
+
+
 def test_planners_expose_typed_core_claim_results_without_breaking_string_api():
     HeuristicClaimPlanner, LLMClaimPlanner = _load_planners()
     heuristic_planner = HeuristicClaimPlanner()
