@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 
@@ -74,6 +74,91 @@ class WorkflowStep:
     output: str
     artifact_count: int
     status: str = "complete"
+
+
+@dataclass(frozen=True)
+class ClaimCandidate:
+    claim: str
+    method_or_mechanism: str = ""
+    target_or_task: str = ""
+    expected_effect: str = ""
+    conditions: list[str] = field(default_factory=list)
+    falsification_test: str = (
+        "Compare the stated outcome against a baseline under the stated condition."
+    )
+    missing_information: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+    proposer: str = "heuristic"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "confidence", _clamp_confidence(self.confidence))
+
+    def score(self) -> float:
+        covered = sum(
+            bool(value)
+            for value in (
+                self.method_or_mechanism,
+                self.target_or_task,
+                self.expected_effect,
+                self.falsification_test,
+            )
+        )
+        return round(covered / 4 * 100 - len(self.missing_information) * 5, 1)
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ClaimCritique:
+    candidate_id: str = ""
+    critic: str = ""
+    rubric_scores: dict[str, float] = field(default_factory=dict)
+    reason_codes: list[str] = field(default_factory=list)
+    revision: str = ""
+    public_summary: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class AgentEvent:
+    stage: str
+    role: str
+    status: str
+    public_summary: str
+    duration_ms: int = 0
+    artifacts: dict[str, object] = field(default_factory=dict)
+    scores: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CoreClaimResult:
+    direction: str
+    selected_claim: str = ""
+    selected_candidate: ClaimCandidate | None = None
+    candidates: list[ClaimCandidate] = field(default_factory=list)
+    critiques: list[ClaimCritique] = field(default_factory=list)
+    events: list[AgentEvent] = field(default_factory=list)
+    unresolved_ambiguities: list[str] = field(default_factory=list)
+    mode: str = "heuristic"
+    degraded: bool = False
+
+    def __post_init__(self) -> None:
+        if self.selected_claim:
+            return
+        if self.selected_candidate is not None:
+            object.__setattr__(self, "selected_claim", self.selected_candidate.claim)
+            return
+        if self.candidates:
+            object.__setattr__(self, "selected_claim", self.candidates[0].claim)
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -322,3 +407,7 @@ def _opportunity_signal(status: str, counts: dict[str, int]) -> str:
     if status == "supported":
         return "low: already supported"
     return "medium: needs targeted search"
+
+
+def _clamp_confidence(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))

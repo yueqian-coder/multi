@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from .core_claim import HeuristicCoreClaimEngine, with_selected_claim
+from .models import CoreClaimResult
 from .text_utils import keywords
 
 
@@ -40,14 +42,23 @@ class ClaimPlan:
 
 
 class ClaimPlanner(Protocol):
+    def extract_core_claim_result(self, query: str) -> CoreClaimResult:
+        ...
+
+    def extract_core_claim(self, query: str) -> str:
+        ...
+
     def build(self, query: str) -> ClaimPlan:
         ...
 
 
 @dataclass
 class HeuristicClaimPlanner:
+    def extract_core_claim_result(self, query: str) -> CoreClaimResult:
+        return HeuristicCoreClaimEngine().run(query)
+
     def extract_core_claim(self, query: str) -> str:
-        return normalize_claim(query)
+        return self.extract_core_claim_result(query).selected_claim
 
     def build(self, query: str) -> ClaimPlan:
         claim = self.extract_core_claim(query)
@@ -124,7 +135,17 @@ class LLMClaimPlanner:
     used_planner: str = field(default="llm", init=False)
     fallback_reason: str = field(default="", init=False)
 
+    def extract_core_claim_result(self, query: str) -> CoreClaimResult:
+        fallback_result = self._fallback_core_claim_result(query)
+        claim = self._extract_core_claim(query)
+        if claim == fallback_result.selected_claim:
+            return fallback_result
+        return with_selected_claim(fallback_result, claim, mode=self.used_planner)
+
     def extract_core_claim(self, query: str) -> str:
+        return self.extract_core_claim_result(query).selected_claim
+
+    def _extract_core_claim(self, query: str) -> str:
         fallback_claim = self.fallback.extract_core_claim(query)
         try:
             content = self.llm_client.chat(_core_claim_messages(query), temperature=0.1)
@@ -143,6 +164,12 @@ class LLMClaimPlanner:
             self.used_planner = "heuristic"
             self.fallback_reason = "LLM core-claim extraction failed; using heuristic planner."
             return fallback_claim
+
+    def _fallback_core_claim_result(self, query: str) -> CoreClaimResult:
+        extractor = getattr(self.fallback, "extract_core_claim_result", None)
+        if extractor:
+            return extractor(query)
+        return HeuristicCoreClaimEngine().run(self.fallback.extract_core_claim(query))
 
     def build(self, query: str) -> ClaimPlan:
         fallback_plan = self.fallback.build(query)
