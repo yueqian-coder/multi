@@ -262,6 +262,7 @@ def _build_idea_opportunities(
                         "and evaluation metric for this assumption."
                     ),
                     linked_evidence=[item.paper_title for item in assumption.evidence],
+                    score=_assumption_opportunity_score(assumption),
                 )
             )
     for finding in negative_evidence[:3]:
@@ -277,6 +278,7 @@ def _build_idea_opportunities(
                     "Build an evaluation setting that reproduces this failure and tests a targeted repair."
                 ),
                 linked_evidence=[finding.paper_title],
+                score=_negative_evidence_score(finding),
             )
         )
     if not opportunities:
@@ -287,9 +289,36 @@ def _build_idea_opportunities(
                 rationale="The retrieved set does not expose enough assumptions or negative evidence.",
                 next_step="Retrieve more papers, especially surveys and papers with limitation sections.",
                 linked_evidence=[],
+                score=55,
             )
         )
+    opportunities.sort(key=lambda item: item.score, reverse=True)
     return opportunities[:8]
+
+
+def _assumption_opportunity_score(assumption: Assumption) -> int:
+    support = sum(1 for item in assumption.evidence if item.stance == "support")
+    negative = sum(1 for item in assumption.evidence if item.stance in {"limit", "contradict"})
+    if assumption.status == "mixed":
+        base = 86
+    elif assumption.status == "unknown":
+        base = 76
+    elif assumption.status == "unsupported":
+        base = 64
+    else:
+        base = 48
+    evidence_bonus = min(8, support + negative)
+    risk_bonus = 4 if assumption.risk == "high" else 0
+    return min(99, base + evidence_bonus + risk_bonus)
+
+
+def _negative_evidence_score(finding: NegativeEvidence) -> int:
+    scores = {
+        "negative_result": 88,
+        "failure_mode": 84,
+        "limitation": 78,
+    }
+    return scores.get(finding.kind, 70)
 
 
 def _sentence_stance(sentence: str) -> str:

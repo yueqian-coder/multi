@@ -117,7 +117,7 @@ class LLMClaimPlanner:
     llm_client: object
     fallback: ClaimPlanner = field(default_factory=HeuristicClaimPlanner)
     max_variants: int = 6
-    max_assumptions: int = 7
+    max_assumptions: int = 8
     used_planner: str = field(default="llm", init=False)
     fallback_reason: str = field(default="", init=False)
 
@@ -163,7 +163,10 @@ def _planner_messages(query: str) -> list[dict[str, str]]:
             "role": "system",
             "content": (
                 "You are ClaimScope's research-planning module. Convert a fuzzy "
-                "research direction into a literature-search plan before ideation. "
+                "research direction into an assumption-centric literature discovery "
+                "plan before ideation. Start from the idea, not from papers. Your job "
+                "is to decompose the direction into a testable core claim, boundary "
+                "conditions, hidden assumptions, and adversarial evidence-search tasks. "
                 "Return JSON only. Do not include markdown, citations, or prose."
             ),
         },
@@ -188,8 +191,12 @@ def _planner_messages(query: str) -> list[dict[str, str]]:
                 "    }\n"
                 "  ]\n"
                 "}\n\n"
-                "Make 3-6 variants and 4-7 assumptions. Queries should be short, "
-                "domain-specific, and optimized for arXiv or Semantic Scholar search."
+                "Make 3-6 variants and 5-8 assumptions when possible. Each assumption "
+                "should test a condition that must be true for the idea to work. Queries "
+                "should be short, domain-specific, adversarial, and optimized for arXiv "
+                "or Semantic Scholar search. Emphasize boundary conditions, domain shift, "
+                "ablation or null results, failure cases, leakage risks, metric validity, "
+                "and whether evidence is actionable rather than merely correlated."
             ),
         },
     ]

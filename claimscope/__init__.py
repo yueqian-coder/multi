@@ -8,6 +8,7 @@ from .models import (
     IdeaOpportunity,
     NegativeEvidence,
     Paper,
+    WorkflowStep,
 )
 from .pipeline import ClaimScopePipeline
 from .planner import HeuristicClaimPlanner, LLMClaimPlanner
@@ -25,4 +26,5 @@ __all__ = [
     "NegativeEvidence",
     "Paper",
     "StaticPaperRetriever",
+    "WorkflowStep",
 ]

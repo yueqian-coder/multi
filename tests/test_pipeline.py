@@ -80,6 +80,9 @@ def test_pipeline_generates_actionable_opportunities_from_gaps():
     report = build_report()
 
     assert report.idea_opportunities
+    scores = [opportunity.score for opportunity in report.idea_opportunities]
+    assert scores == sorted(scores, reverse=True)
+    assert all(score > 0 for score in scores)
     assert any(
         opportunity.kind in {"assumption_gap", "negative_evidence", "boundary_condition"}
         for opportunity in report.idea_opportunities
@@ -96,11 +99,43 @@ def test_report_markdown_contains_pre_ideation_traceability_sections():
     report = build_report()
     markdown = report.to_markdown()
 
+    assert "Workflow Trace" in markdown
+    assert "Assumption Evidence Matrix" in markdown
     assert "Claim Variants" in markdown
     assert "Assumption Gaps" in markdown
     assert "Negative Evidence" in markdown
     assert "Idea Opportunities" in markdown
     assert "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks" in markdown
+
+
+def test_report_exposes_seven_step_workflow_trace():
+    report = build_report()
+    steps = report.workflow_steps()
+
+    assert [step.name for step in steps] == [
+        "Research Direction",
+        "Core Claim",
+        "Claim Variants / Boundary Conditions",
+        "Hidden Assumptions",
+        "Evidence Queries",
+        "Evidence Cards",
+        "Idea Opportunities",
+    ]
+    assert all(step.status == "complete" for step in steps)
+    assert steps[0].output == report.query
+    assert steps[-1].artifact_count == len(report.idea_opportunities)
+
+
+def test_assumption_matrix_counts_adversarial_evidence_buckets():
+    report = build_report()
+    matrix = report.assumption_matrix()
+
+    assert matrix
+    assert any(row["Support"] > 0 for row in matrix)
+    assert any(row["Contradict"] > 0 for row in matrix)
+    assert any(row["Limitation"] > 0 for row in matrix)
+    assert any(row["Null Result"] > 0 for row in matrix)
+    assert all("Opportunity Signal" in row for row in matrix)
 
 
 def test_report_uses_readable_claim_text_in_generated_sections():

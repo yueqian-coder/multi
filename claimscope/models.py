@@ -64,6 +64,16 @@ class IdeaOpportunity:
     rationale: str
     next_step: str
     linked_evidence: list[str] = field(default_factory=list)
+    score: int = 0
+
+
+@dataclass(frozen=True)
+class WorkflowStep:
+    name: str
+    description: str
+    output: str
+    artifact_count: int
+    status: str = "complete"
 
 
 @dataclass(frozen=True)
@@ -79,6 +89,84 @@ class AnalysisReport:
         default_factory=lambda: datetime.now(timezone.utc)
     )
 
+    def workflow_steps(self) -> list[WorkflowStep]:
+        evidence_query_count = sum(
+            1
+            for assumption in self.assumptions
+            for query in [
+                assumption.support_query,
+                assumption.contradict_query,
+                assumption.limitation_query,
+                assumption.null_result_query,
+            ]
+            if query
+        )
+        evidence_card_count = sum(
+            len(assumption.evidence) for assumption in self.assumptions
+        ) + len(self.negative_evidence)
+        return [
+            WorkflowStep(
+                name="Research Direction",
+                description="User-provided fuzzy idea or research direction.",
+                output=self.query,
+                artifact_count=1,
+            ),
+            WorkflowStep(
+                name="Core Claim",
+                description="Normalized testable claim used as the retrieval anchor.",
+                output=self.claim,
+                artifact_count=1,
+            ),
+            WorkflowStep(
+                name="Claim Variants / Boundary Conditions",
+                description="Alternative claim formulations, boundaries, and failure variants.",
+                output=f"{len(self.claim_variants)} variants generated",
+                artifact_count=len(self.claim_variants),
+            ),
+            WorkflowStep(
+                name="Hidden Assumptions",
+                description="Implicit assumptions that must hold for the direction to work.",
+                output=f"{len(self.assumptions)} assumptions identified",
+                artifact_count=len(self.assumptions),
+            ),
+            WorkflowStep(
+                name="Evidence Queries",
+                description="Adversarial support, contradiction, limitation, and null-result searches.",
+                output=f"{evidence_query_count} targeted queries generated",
+                artifact_count=evidence_query_count,
+            ),
+            WorkflowStep(
+                name="Evidence Cards",
+                description="Traceable paper snippets mapped to assumptions and limitations.",
+                output=f"{evidence_card_count} evidence cards extracted",
+                artifact_count=evidence_card_count,
+            ),
+            WorkflowStep(
+                name="Idea Opportunities",
+                description="Ranked opportunity slots synthesized from weak assumptions and failures.",
+                output=f"{len(self.idea_opportunities)} opportunities ranked",
+                artifact_count=len(self.idea_opportunities),
+            ),
+        ]
+
+    def assumption_matrix(self) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for assumption in self.assumptions:
+            counts = _evidence_counts(assumption.evidence)
+            rows.append(
+                {
+                    "Assumption": assumption.text,
+                    "Status": assumption.status,
+                    "Risk": assumption.risk,
+                    "Support": counts["support"],
+                    "Contradict": counts["contradict"],
+                    "Limitation": counts["limitation"],
+                    "Null Result": counts["null_result"],
+                    "Opportunity Signal": _opportunity_signal(assumption.status, counts),
+                }
+            )
+        return rows
+
     def to_markdown(self) -> str:
         lines: list[str] = [
             f"# ClaimScope Report",
@@ -87,8 +175,14 @@ class AnalysisReport:
             f"**Normalized claim:** {self.claim}",
             f"**Generated:** {self.generated_at.isoformat(timespec='seconds')}",
             "",
-            "## Retrieved Papers",
+            "## Workflow Trace",
         ]
+        for idx, step in enumerate(self.workflow_steps(), 1):
+            lines.append(f"{idx}. **{step.name}** - `{step.status}`")
+            lines.append(f"   - {step.description}")
+            lines.append(f"   - Output: {step.output}")
+
+        lines.extend(["", "## Retrieved Papers"])
         if self.papers:
             for idx, paper in enumerate(self.papers, 1):
                 lines.append(f"{idx}. {paper.citation}")
@@ -96,6 +190,31 @@ class AnalysisReport:
                     lines.append(f"   - URL: {paper.url}")
         else:
             lines.append("No papers were retrieved.")
+
+        lines.extend(["", "## Assumption Evidence Matrix"])
+        if self.assumptions:
+            lines.append(
+                "| Assumption | Status | Support | Contradict | Limitation | Null Result | Opportunity Signal |"
+            )
+            lines.append("|---|---:|---:|---:|---:|---:|---|")
+            for row in self.assumption_matrix():
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            str(row["Assumption"]).replace("|", "/"),
+                            str(row["Status"]),
+                            str(row["Support"]),
+                            str(row["Contradict"]),
+                            str(row["Limitation"]),
+                            str(row["Null Result"]),
+                            str(row["Opportunity Signal"]),
+                        ]
+                    )
+                    + " |"
+                )
+        else:
+            lines.append("No assumptions were generated.")
 
         lines.extend(["", "## Claim Variants"])
         for variant in self.claim_variants:
@@ -145,7 +264,9 @@ class AnalysisReport:
         lines.extend(["", "## Idea Opportunities"])
         if self.idea_opportunities:
             for opportunity in self.idea_opportunities:
-                lines.append(f"- **{opportunity.title}** (`{opportunity.kind}`)")
+                lines.append(
+                    f"- **{opportunity.title}** (`{opportunity.kind}`, score: `{opportunity.score}`)"
+                )
                 lines.append(f"  - Rationale: {opportunity.rationale}")
                 lines.append(f"  - Next step: {opportunity.next_step}")
                 if opportunity.linked_evidence:
@@ -157,3 +278,47 @@ class AnalysisReport:
             lines.append("No opportunity slots were generated.")
 
         return "\n".join(lines)
+
+
+def _evidence_counts(evidence: list[EvidenceItem]) -> dict[str, int]:
+    counts = {
+        "support": 0,
+        "contradict": 0,
+        "limitation": 0,
+        "null_result": 0,
+    }
+    for item in evidence:
+        if item.stance == "support":
+            counts["support"] += 1
+        elif item.stance == "contradict":
+            counts["contradict"] += 1
+        elif item.stance == "limit":
+            counts["limitation"] += 1
+        lower = item.snippet.lower()
+        if any(
+            marker in lower
+            for marker in [
+                "no consistent",
+                "no improvement",
+                "null result",
+                "no significant",
+                "does not improve",
+                "marginal gain",
+            ]
+        ):
+            counts["null_result"] += 1
+    return counts
+
+
+def _opportunity_signal(status: str, counts: dict[str, int]) -> str:
+    if counts["support"] and (counts["contradict"] or counts["limitation"]):
+        return "high: contested boundary"
+    if status == "unknown":
+        return "medium: untested assumption"
+    if counts["null_result"]:
+        return "high: null-result gap"
+    if counts["limitation"]:
+        return "medium: boundary condition"
+    if status == "supported":
+        return "low: already supported"
+    return "medium: needs targeted search"
