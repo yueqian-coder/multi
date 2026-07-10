@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 
 from .models import (
+    AgentEvent,
     AnalysisReport,
     Assumption,
     ClaimVariant,
@@ -37,6 +39,8 @@ SUPPORT_MARKERS = (
     "提升",
     "降低",
     "有效",
+    "改善",
+    "减少",
 )
 
 NEGATIVE_MARKERS = (
@@ -58,10 +62,32 @@ NEGATIVE_MARKERS = (
     "under domain shift",
     "unsupported",
     "risk",
+    "not significant",
+    "non-significant",
+    "negative result",
+    "no statistically significant",
+    "no significant improvement",
     "限制",
     "失败",
     "无效",
     "噪声",
+    "没有显著提升",
+)
+
+
+NULL_RESULT_MARKERS = (
+    "no consistent",
+    "no improvement",
+    "null result",
+    "no significant",
+    "not significant",
+    "non-significant",
+    "does not improve",
+    "marginal gain",
+    "negative result",
+    "没有显著提升",
+    "无显著提升",
+    "无效",
 )
 
 
@@ -82,16 +108,129 @@ class ClaimScopePipeline:
         return cls(retriever=retriever, planner=planner)
 
     def analyze(self, query: str, limit: int = 20) -> AnalysisReport:
+        events: list[AgentEvent] = []
+        warnings: list[str] = []
+
+        started = time.perf_counter()
+        _emit_event(
+            events,
+            "research_direction",
+            "user_input",
+            started,
+            "complete",
+            "Captured the public research direction.",
+            {"query_characters": len(query)},
+        )
+
+        started = time.perf_counter()
         plan = self.planner.build(query)
         claim = plan.claim
+        fallback_reason = getattr(self.planner, "fallback_reason", "")
+        if fallback_reason:
+            warnings.append("Heuristic fallback used for planning; verify generated assumptions.")
+        _emit_event(
+            events,
+            "core_claim",
+            "claim_planner",
+            started,
+            "degraded" if fallback_reason else "complete",
+            "Selected a normalized, testable core claim.",
+            {"claim_present": bool(claim)},
+        )
+        _emit_event(
+            events,
+            "claim_boundaries",
+            "claim_planner",
+            time.perf_counter(),
+            "complete" if plan.claim_variants else "skipped",
+            "Prepared claim variants and boundary-condition probes.",
+            {"variant_count": len(plan.claim_variants)},
+        )
+        _emit_event(
+            events,
+            "hidden_assumptions",
+            "claim_planner",
+            time.perf_counter(),
+            "complete" if plan.assumptions else "skipped",
+            "Identified hidden assumptions to test against retrieved evidence.",
+            {"assumption_count": len(plan.assumptions)},
+        )
         retrieval_queries = [claim]
         for item in plan.assumptions:
             retrieval_queries.extend(item.retrieval_queries)
-        papers = _targeted_search(self.retriever, retrieval_queries, claim, limit)
+        _emit_event(
+            events,
+            "evidence_queries",
+            "query_builder",
+            time.perf_counter(),
+            "complete" if retrieval_queries else "skipped",
+            "Generated adversarial evidence queries.",
+            {"query_count": len([item for item in retrieval_queries if item])},
+        )
+
+        started = time.perf_counter()
+        papers, retrieval_warnings = _targeted_search(
+            self.retriever, retrieval_queries, claim, limit
+        )
+        warnings.extend(retrieval_warnings)
+        _emit_event(
+            events,
+            "evidence_retrieval",
+            "paper_retriever",
+            started,
+            "degraded" if retrieval_warnings or not papers else "complete",
+            "Retrieved and deduplicated candidate papers.",
+            {"paper_count": len(papers)},
+        )
+
+        started = time.perf_counter()
         variants = _build_claim_variants(plan.claim_variants, claim, papers)
         assumptions = _build_assumptions(plan.assumptions, papers)
         negative_evidence = _mine_negative_evidence(papers)
+        direct_evidence_count = sum(
+            len(assumption.evidence) for assumption in assumptions
+        )
+        _emit_event(
+            events,
+            "evidence_adjudication",
+            "evidence_mapper",
+            started,
+            "degraded" if not direct_evidence_count else "complete",
+            "Mapped abstract evidence to assumptions with conservative stance labels.",
+            {"direct_evidence_count": direct_evidence_count},
+        )
+
+        started = time.perf_counter()
         opportunities = _build_idea_opportunities(assumptions, negative_evidence)
+        _emit_event(
+            events,
+            "opportunity_synthesis",
+            "opportunity_builder",
+            started,
+            "complete" if opportunities else "skipped",
+            "Synthesized opportunity slots from gaps and negative evidence.",
+            {"opportunity_count": len(opportunities)},
+        )
+
+        started = time.perf_counter()
+        warnings.extend(
+            _quality_warnings(
+                papers=papers,
+                assumptions=assumptions,
+                direct_evidence_count=direct_evidence_count,
+                planner=self.planner,
+            )
+        )
+        warnings = _dedupe_warnings(warnings)
+        _emit_event(
+            events,
+            "quality_review",
+            "quality_reviewer",
+            started,
+            "degraded" if warnings else "complete",
+            "Reviewed retrieval coverage, evidence limitations, and fallback signals.",
+            {"warning_count": len(warnings)},
+        )
         return AnalysisReport(
             query=query,
             claim=claim,
@@ -100,6 +239,8 @@ class ClaimScopePipeline:
             assumptions=assumptions,
             negative_evidence=negative_evidence,
             idea_opportunities=opportunities,
+            events=events,
+            warnings=warnings,
         )
 
     def extract_core_claim(self, query: str) -> str:
@@ -173,11 +314,15 @@ def _collect_evidence(
             score = max(overlap_score(query, combined_text) for query in queries)
             sentence_terms = set(keywords(combined_text, 20))
             shared_terms = claim_terms & sentence_terms
-            if score < 0.08 or len(shared_terms) < 2:
-                continue
             stance = _sentence_stance(sentence)
             if stance == "mention":
                 continue
+            if score < 0.08 or len(shared_terms) < 2:
+                cjk_stance_match = _contains_cjk(combined_text) and (
+                    score >= 0.08 or stance == "contradict"
+                )
+                if not cjk_stance_match:
+                    continue
             candidates.append(
                 EvidenceItem(
                     paper_title=paper.title,
@@ -197,6 +342,20 @@ def _mine_negative_evidence(papers: list[Paper]) -> list[NegativeEvidence]:
         for sentence in split_sentences(paper.abstract):
             lower = sentence.lower()
             if not _contains_any(lower, NEGATIVE_MARKERS):
+                continue
+            if _contains_any(lower, NULL_RESULT_MARKERS):
+                findings.append(
+                    NegativeEvidence(
+                        kind="negative_result",
+                        text=truncate(sentence),
+                        paper_title=paper.title,
+                        year=paper.year,
+                        implication=(
+                            "Treat this as a candidate boundary condition or "
+                            "null-result replication slot."
+                        ),
+                    )
+                )
                 continue
             if "no consistent" in lower or "no improvement" in lower or "无效" in lower:
                 kind = "negative_result"
@@ -221,17 +380,22 @@ def _mine_negative_evidence(papers: list[Paper]) -> list[NegativeEvidence]:
 
 def _targeted_search(
     retriever: PaperRetriever, queries: list[str], original_claim: str, limit: int
-) -> list[Paper]:
+) -> tuple[list[Paper], list[str]]:
     seen: set[str] = set()
     papers: list[Paper] = []
+    warnings: list[str] = []
     per_query_limit = max(5, min(limit, 10))
     for query in queries:
         try:
             results = retriever.search(query, limit=per_query_limit)
         except Exception:
+            warnings.append(
+                f"Retriever {_retriever_name(retriever)} failed; retrieval may be incomplete."
+            )
             continue
+        warnings.extend(_consume_retriever_warnings(retriever))
         for paper in results:
-            key = paper.title.lower().strip()
+            key = _paper_identity_key(paper)
             if not key or key in seen:
                 continue
             seen.add(key)
@@ -246,7 +410,7 @@ def _targeted_search(
         for paper in ranked
         if _relevance_score(original_claim, paper) >= 0.08
     ]
-    return relevant[:limit]
+    return relevant[:limit], _dedupe_warnings(warnings)
 
 
 def _build_idea_opportunities(
@@ -330,7 +494,7 @@ def _negative_evidence_score(finding: NegativeEvidence) -> int:
 def _sentence_stance(sentence: str) -> str:
     lower = sentence.lower()
     if _contains_any(lower, NEGATIVE_MARKERS):
-        if "no consistent" in lower or "no improvement" in lower:
+        if _contains_any(lower, NULL_RESULT_MARKERS):
             return "contradict"
         return "limit"
     if _contains_any(lower, SUPPORT_MARKERS):
@@ -341,6 +505,92 @@ def _sentence_stance(sentence: str) -> str:
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
     lower = text.lower()
     return any(marker in lower for marker in markers)
+
+
+def _contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= character <= "\u9fff" for character in text)
+
+
+def _paper_identity_key(paper: Paper) -> str:
+    if paper.external_id:
+        return f"id:{paper.external_id.lower().strip()}"
+    return f"title:{' '.join(paper.title.lower().split())}"
+
+
+def _retriever_name(retriever: PaperRetriever) -> str:
+    return retriever.__class__.__name__
+
+
+def _consume_retriever_warnings(retriever: PaperRetriever) -> list[str]:
+    warnings = getattr(retriever, "last_warnings", [])
+    if not isinstance(warnings, list):
+        return []
+    return [warning for warning in warnings if isinstance(warning, str)]
+
+
+def _quality_warnings(
+    *,
+    papers: list[Paper],
+    assumptions: list[Assumption],
+    direct_evidence_count: int,
+    planner: ClaimPlanner,
+) -> list[str]:
+    warnings: list[str] = []
+    if not papers:
+        warnings.append(
+            "Quality review: zero papers retrieved; all assumption statuses remain provisional."
+        )
+    if direct_evidence_count == 0:
+        warnings.append(
+            "Quality review: zero direct evidence cards were mapped from retrieved abstracts."
+        )
+    if assumptions and all(assumption.status == "unknown" for assumption in assumptions):
+        warnings.append("Quality review: all assumptions remain unknown after retrieval.")
+    if papers:
+        warnings.append(
+            "Quality review: abstract-only evidence; inspect full papers before relying on the report."
+        )
+    if (
+        planner.__class__.__name__ == "HeuristicClaimPlanner"
+        or getattr(planner, "fallback_reason", "")
+    ):
+        warnings.append(
+            "Quality review: heuristic fallback used; validate the claim plan with domain expertise."
+        )
+    return warnings
+
+
+def _dedupe_warnings(warnings: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for warning in warnings:
+        key = warning.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(warning)
+    return deduped
+
+
+def _emit_event(
+    events: list[AgentEvent],
+    stage: str,
+    role: str,
+    started: float,
+    status: str,
+    public_summary: str,
+    artifacts: dict[str, object] | None = None,
+) -> None:
+    events.append(
+        AgentEvent(
+            stage=stage,
+            role=role,
+            status=status,
+            public_summary=public_summary,
+            duration_ms=max(0, round((time.perf_counter() - started) * 1000)),
+            artifacts=artifacts or {},
+        )
+    )
 
 
 def _relevance_score(claim: str, paper: Paper) -> float:

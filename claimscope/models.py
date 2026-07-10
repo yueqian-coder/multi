@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import re
 
 
 @dataclass(frozen=True)
@@ -12,6 +13,18 @@ class Paper:
     abstract: str
     source: str
     url: str = ""
+    external_id: str = ""
+    is_fixture: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.external_id:
+            object.__setattr__(
+                self,
+                "external_id",
+                _derive_external_id(self.source, self.url),
+            )
+        if not self.is_fixture and self.source.lower() in {"demo", "fixture"}:
+            object.__setattr__(self, "is_fixture", True)
 
     @property
     def citation(self) -> str:
@@ -27,6 +40,7 @@ class EvidenceItem:
     snippet: str
     stance: str
     score: float = 0.0
+    method: str = "abstract_heuristic"
 
 
 @dataclass(frozen=True)
@@ -170,6 +184,8 @@ class AnalysisReport:
     assumptions: list[Assumption]
     negative_evidence: list[NegativeEvidence]
     idea_opportunities: list[IdeaOpportunity]
+    events: list[AgentEvent] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     generated_at: datetime = field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
@@ -270,11 +286,19 @@ class AnalysisReport:
         lines.extend(["", "## Retrieved Papers"])
         if self.papers:
             for idx, paper in enumerate(self.papers, 1):
-                lines.append(f"{idx}. {paper.citation}")
+                fixture_label = " [synthetic fixture]" if paper.is_fixture else ""
+                lines.append(f"{idx}. {paper.citation}{fixture_label}")
+                if paper.external_id:
+                    lines.append(f"   - External ID: {paper.external_id}")
                 if paper.url:
                     lines.append(f"   - URL: {paper.url}")
         else:
             lines.append("No papers were retrieved.")
+
+        if self.warnings:
+            lines.extend(["", "## Quality Warnings"])
+            for warning in self.warnings:
+                lines.append(f"- {warning}")
 
         lines.extend(["", "## Assumption Evidence Matrix"])
         if self.assumptions:
@@ -389,6 +413,12 @@ def _evidence_counts(evidence: list[EvidenceItem]) -> dict[str, int]:
                 "no significant",
                 "does not improve",
                 "marginal gain",
+                "not significant",
+                "non-significant",
+                "negative result",
+                "没有显著提升",
+                "无显著提升",
+                "无效",
             ]
         ):
             counts["null_result"] += 1
@@ -411,3 +441,33 @@ def _opportunity_signal(status: str, counts: dict[str, int]) -> str:
 
 def _clamp_confidence(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
+
+
+def _derive_external_id(source: str, url: str) -> str:
+    arxiv_id = _extract_arxiv_id(url)
+    if arxiv_id:
+        return f"arxiv:{arxiv_id}"
+    if "semantic" in source.lower():
+        semantic_id = _extract_semantic_scholar_id(url)
+        if semantic_id:
+            return f"semantic_scholar:{semantic_id}"
+    if url:
+        return f"url:{url.lower().strip()}"
+    return ""
+
+
+def _extract_arxiv_id(url: str) -> str:
+    if not url:
+        return ""
+    match = re.search(r"arxiv\.org/(?:abs|pdf)/([^?#]+)", url, flags=re.IGNORECASE)
+    if not match:
+        return ""
+    raw_id = match.group(1).removesuffix(".pdf")
+    return re.sub(r"v\d+$", "", raw_id)
+
+
+def _extract_semantic_scholar_id(url: str) -> str:
+    if not url:
+        return ""
+    match = re.search(r"semanticscholar\.org/paper/(?:[^/]+/)?([A-Za-z0-9]+)", url)
+    return match.group(1) if match else ""

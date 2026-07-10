@@ -5,7 +5,7 @@ import os
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from .models import Paper
@@ -111,6 +111,11 @@ class SemanticScholarRetriever:
                     abstract=abstract,
                     source="Semantic Scholar",
                     url=item.get("url") or "",
+                    external_id=(
+                        f"semantic_scholar:{item['paperId']}"
+                        if item.get("paperId")
+                        else ""
+                    ),
                 )
             )
         return papers
@@ -119,17 +124,22 @@ class SemanticScholarRetriever:
 @dataclass
 class CombinedRetriever:
     retrievers: list[PaperRetriever]
+    last_warnings: list[str] = field(default_factory=list, init=False)
 
     def search(self, query: str, limit: int = 20) -> list[Paper]:
+        self.last_warnings = []
         seen: set[str] = set()
         papers: list[Paper] = []
         for retriever in self.retrievers:
             try:
                 candidates = retriever.search(query, limit=limit)
             except Exception:
+                self.last_warnings.append(
+                    f"Retriever {retriever.__class__.__name__} failed; retrieval may be incomplete."
+                )
                 continue
             for paper in candidates:
-                key = paper.title.lower().strip()
+                key = _paper_identity_key(paper)
                 if key and key not in seen:
                     seen.add(key)
                     papers.append(paper)
@@ -144,3 +154,9 @@ class CombinedRetriever:
 def _entry_text(entry: ET.Element, path: str, ns: dict[str, str]) -> str:
     node = entry.find(path, ns)
     return " ".join((node.text or "").split()) if node is not None else ""
+
+
+def _paper_identity_key(paper: Paper) -> str:
+    if paper.external_id:
+        return f"id:{paper.external_id.lower().strip()}"
+    return f"title:{' '.join(paper.title.lower().split())}"

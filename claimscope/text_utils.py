@@ -43,6 +43,9 @@ def split_sentences(text: str) -> list[str]:
     compact = normalize_space(text)
     if not compact:
         return []
+    if re.search(r"[。！？]", compact):
+        parts = re.split(r"(?<=[。！？])", compact)
+        return [part.strip() for part in parts if part.strip()]
     parts = re.split(r"(?<=[.!?。！？])\s+|(?<=[。！？])", compact)
     return [part.strip() for part in parts if part.strip()]
 

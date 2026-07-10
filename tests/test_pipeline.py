@@ -1,7 +1,7 @@
 from claimscope.models import Paper
 from claimscope.pipeline import ClaimScopePipeline
 from claimscope.planner import HeuristicClaimPlanner, LLMClaimPlanner
-from claimscope.retrievers import StaticPaperRetriever
+from claimscope.retrievers import CombinedRetriever, StaticPaperRetriever
 from claimscope.llm import OpenAICompatibleClient
 
 
@@ -139,6 +139,128 @@ def test_report_exposes_seven_step_workflow_trace():
     assert all(step.status == "complete" for step in steps)
     assert steps[0].output == report.query
     assert steps[-1].artifact_count == len(report.idea_opportunities)
+
+
+def test_report_exposes_stage_events_and_retrieval_limitations():
+    report = build_report()
+
+    assert [event.stage for event in report.events] == [
+        "research_direction",
+        "core_claim",
+        "claim_boundaries",
+        "hidden_assumptions",
+        "evidence_queries",
+        "evidence_retrieval",
+        "evidence_adjudication",
+        "opportunity_synthesis",
+        "quality_review",
+    ]
+    assert all(event.public_summary for event in report.events)
+    assert all(
+        event.status in {"complete", "degraded", "failed", "skipped"}
+        for event in report.events
+    )
+    assert "abstract-only" in " ".join(report.warnings).lower()
+    assert all("secret" not in event.public_summary.lower() for event in report.events)
+
+
+def test_retrieval_miss_stays_unknown_not_unsupported():
+    report = ClaimScopePipeline(StaticPaperRetriever([])).analyze(
+        "Diffusion models improve MRI tumor segmentation with limited labels"
+    )
+
+    assert report.papers == []
+    assert report.assumptions
+    assert all(item.status == "unknown" for item in report.assumptions)
+    assert any("zero papers" in warning.lower() for warning in report.warnings)
+
+
+def test_paper_and_evidence_expose_auditable_provenance_defaults():
+    report = build_report()
+
+    assert all(paper.external_id for paper in report.papers if paper.url)
+    assert all(paper.is_fixture for paper in report.papers)
+    assert all(
+        evidence.method == "abstract_heuristic"
+        for assumption in report.assumptions
+        for evidence in assumption.evidence
+    )
+
+
+def test_targeted_search_deduplicates_by_external_id_before_title():
+    papers = [
+        Paper(
+            title="RAG Factuality Study Preprint",
+            year=2024,
+            authors=["A"],
+            source="fixture",
+            url="https://arxiv.org/abs/2401.12345v2",
+            abstract="RAG improves factuality and reduces hallucination in question answering.",
+        ),
+        Paper(
+            title="Retitled RAG Factuality Camera Ready",
+            year=2024,
+            authors=["A"],
+            source="fixture",
+            url="https://arxiv.org/pdf/2401.12345v2",
+            abstract="RAG improves factuality and reduces hallucination in question answering.",
+        ),
+    ]
+
+    report = ClaimScopePipeline(StaticPaperRetriever(papers)).analyze(
+        "RAG improves factuality and reduces hallucination"
+    )
+
+    assert len(report.papers) == 1
+    assert report.papers[0].external_id == "arxiv:2401.12345"
+
+
+class SecretFailingRetriever:
+    def search(self, query: str, limit: int = 20):
+        raise RuntimeError("secret-token-123 backend exploded")
+
+
+def test_combined_retriever_failures_become_sanitized_pipeline_warnings():
+    report = ClaimScopePipeline(
+        CombinedRetriever(
+            [SecretFailingRetriever(), StaticPaperRetriever(sample_papers())]
+        )
+    ).analyze("RAG can reliably reduce hallucination in LLM-generated answers")
+
+    joined = " ".join(report.warnings)
+    assert report.papers
+    assert "SecretFailingRetriever" in joined
+    assert "secret-token-123" not in joined
+
+
+def test_multilingual_and_null_result_markers_classify_conservatively():
+    papers = [
+        Paper(
+            title="中文检索增强研究",
+            year=2024,
+            authors=["Li"],
+            source="fixture",
+            abstract=(
+                "检索增强生成可以提升问答事实性。"
+                "在噪声文档下没有显著提升。"
+                "本文还介绍检索系统。"
+            ),
+        )
+    ]
+
+    report = ClaimScopePipeline(StaticPaperRetriever(papers)).analyze(
+        "检索增强生成可以提升问答事实性"
+    )
+
+    evidence = [
+        item
+        for assumption in report.assumptions
+        for item in assumption.evidence
+    ]
+    assert any(item.stance == "support" for item in evidence)
+    assert any(item.stance == "contradict" for item in evidence)
+    assert all("介绍检索系统" not in item.snippet for item in evidence)
+    assert any(row["Null Result"] > 0 for row in report.assumption_matrix())
 
 
 def test_assumption_matrix_counts_adversarial_evidence_buckets():
