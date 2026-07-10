@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+title: ClaimScope
+version: 0.2.0
+message: "If ClaimScope supports your work, please cite this software."
+type: software
+authors:
+  - family-names: ClaimScope contributors
+date-released: 2026-07-11
+license: MIT
+repository-code: https://github.com/claimscope/claimscope

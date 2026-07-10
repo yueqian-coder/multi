@@ -1,0 +1,19 @@
+{
+  "direction": "RAG can reliably reduce hallucination in LLM-generated answers",
+  "selected_claim": "RAG can reliably reduce hallucination in LLM-generated answers",
+  "selected_candidate": {
+    "claim": "RAG can reliably reduce hallucination in LLM-generated answers",
+    "method_or_mechanism": "RAG can reliably reduce hallucination",
+    "target_or_task": "LLM-generated answers",
+    "expected_effect": "reduce hallucination in LLM-generated answers",
+    "conditions": [],
+    "falsification_test": "Compare the stated outcome against a baseline under the stated condition.",
+    "missing_information": [],
+    "confidence": 1.0,
+    "proposer": "heuristic"
+  },
+  "events": [{"stage": "core_claim", "role": "heuristic_core_claim_engine", "status": "complete", "public_summary": "Built a deterministic baseline claim candidate without private reasoning.", "duration_ms": 1, "artifacts": {"candidate_count": 1}, "scores": {"selected_candidate": 100.0}}],
+  "mode": "heuristic",
+  "degraded": false,
+  "fixture_note": "The companion report uses synthetic fixture papers."
+}
