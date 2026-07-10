@@ -1,550 +1,171 @@
 from __future__ import annotations
 
+import os
 from html import escape
 
 import streamlit as st
 
-from claimscope.cli import DEMO_PAPERS
 from claimscope.llm import OpenAICompatibleClient
-from claimscope.models import AnalysisReport, Assumption, IdeaOpportunity
-from claimscope.pipeline import ClaimScopePipeline
-from claimscope.planner import HeuristicClaimPlanner, LLMClaimPlanner
-from claimscope.retrievers import (
-    ArxivRetriever,
-    CombinedRetriever,
-    SemanticScholarRetriever,
-    StaticPaperRetriever,
+from claimscope.service import ClaimScopeService
+from claimscope.ui_components import (
+    confidence_label,
+    feedback_jsonl,
+    provider_host,
+    render_activity,
+    render_candidate,
+    render_critique_summary,
+    render_discovery_evidence,
+    report_markdown,
 )
+
+
+DEFAULT_DIRECTION = "RAG can reliably reduce hallucination in LLM-generated answers"
 
 
 def inject_style() -> None:
-    st.markdown(
-        """
-        <style>
-        :root {
-            --ink: #111827;
-            --muted: #667085;
-            --line: #d9e2ec;
-            --surface: #ffffff;
-            --soft: #f5f8fb;
-            --teal: #007c89;
-            --indigo: #4f46e5;
-            --amber: #b45309;
-            --red: #c2410c;
-            --green: #047857;
-        }
-        .stApp {
-            background:
-                linear-gradient(180deg, #f8fbfd 0%, #eef4f7 100%);
-            color: var(--ink);
-        }
-        .block-container {
-            max-width: 1480px;
-            padding-top: 1.35rem;
-            padding-bottom: 3rem;
-        }
-        [data-testid="stSidebar"] {
-            background: #ffffff;
-            border-right: 1px solid var(--line);
-        }
-        [data-testid="stSidebar"] h2,
-        [data-testid="stSidebar"] h3 {
-            letter-spacing: 0;
-        }
-        div.stButton > button:first-child {
-            background: linear-gradient(135deg, var(--teal), var(--indigo));
-            color: #ffffff;
-            border: 0;
-            border-radius: 8px;
-            min-height: 46px;
-            font-weight: 800;
-            box-shadow: 0 12px 26px rgba(0, 124, 137, 0.22);
-        }
-        div.stButton > button:first-child:hover {
-            color: #ffffff;
-            border: 0;
-            filter: brightness(0.98);
-        }
-        button[data-baseweb="tab"] {
-            font-weight: 700;
-        }
-        textarea {
-            border-radius: 8px !important;
-            border-color: var(--line) !important;
-            background: #ffffff !important;
-        }
-        .hero {
-            background: var(--surface);
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 26px 28px;
-            box-shadow: 0 18px 42px rgba(15, 23, 42, 0.07);
-            margin-bottom: 18px;
-        }
-        .hero h1 {
-            font-size: 42px;
-            line-height: 1.05;
-            margin: 0 0 8px 0;
-            letter-spacing: 0;
-        }
-        .hero p {
-            color: var(--muted);
-            font-size: 16px;
-            margin: 0;
-        }
-        .metric-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
-            margin: 14px 0 4px 0;
-        }
-        .metric-card {
-            background: #ffffff;
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 14px 16px;
-        }
-        .metric-label {
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-        .metric-value {
-            color: var(--ink);
-            font-size: 27px;
-            line-height: 1.15;
-            font-weight: 800;
-            margin-top: 6px;
-        }
-        .workflow-grid {
-            display: grid;
-            grid-template-columns: repeat(7, minmax(0, 1fr));
-            gap: 10px;
-            margin: 4px 0 18px 0;
-        }
-        .workflow-step {
-            background: #ffffff;
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 13px 12px;
-            min-height: 154px;
-        }
-        .workflow-index {
-            width: 26px;
-            height: 26px;
-            border-radius: 999px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: var(--teal);
-            color: white;
-            font-size: 13px;
-            font-weight: 800;
-            margin-bottom: 9px;
-        }
-        .workflow-title {
-            font-size: 13px;
-            font-weight: 800;
-            color: var(--ink);
-            line-height: 1.25;
-            min-height: 34px;
-        }
-        .workflow-output {
-            color: var(--muted);
-            font-size: 12px;
-            line-height: 1.35;
-            margin-top: 8px;
-        }
-        .callout {
-            background: #ffffff;
-            border: 1px solid var(--line);
-            border-left: 4px solid var(--teal);
-            border-radius: 8px;
-            padding: 16px 18px;
-            margin: 10px 0 16px 0;
-        }
-        .section-title {
-            font-size: 20px;
-            font-weight: 850;
-            letter-spacing: 0;
-            margin: 8px 0 6px 0;
-        }
-        .opportunity-card {
-            background: #ffffff;
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 16px 18px;
-            margin-bottom: 12px;
-            box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
-        }
-        .opportunity-head {
-            display: flex;
-            justify-content: space-between;
-            gap: 18px;
-            align-items: flex-start;
-        }
-        .opportunity-title {
-            font-size: 15px;
-            font-weight: 820;
-            color: var(--ink);
-            line-height: 1.35;
-        }
-        .score-pill {
-            min-width: 62px;
-            text-align: center;
-            border-radius: 8px;
-            padding: 8px 10px;
-            color: #ffffff;
-            background: linear-gradient(135deg, var(--indigo), var(--teal));
-            font-weight: 850;
-        }
-        .small-label {
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-            margin-top: 10px;
-        }
-        .body-copy {
-            color: #344054;
-            font-size: 13px;
-            line-height: 1.55;
-            margin-top: 6px;
-        }
-        .status-supported { color: var(--green); font-weight: 800; }
-        .status-mixed { color: var(--amber); font-weight: 800; }
-        .status-unsupported { color: var(--red); font-weight: 800; }
-        .status-unknown { color: var(--indigo); font-weight: 800; }
-        @media (max-width: 980px) {
-            .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .workflow-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-            .hero h1 { font-size: 34px; }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown("""
+    <style>
+    :root { --ink:#202638; --muted:#667085; --line:#d7dce5; --surface:#fff; --cool:#f5f7fa; --teal:#087f86; --indigo:#3f5bc8; --amber:#c98500; --red:#c03636; }
+    .stApp { background:var(--cool); color:var(--ink); }
+    .block-container { max-width:1500px; padding:1rem 1.1rem 2.5rem; }
+    [data-testid="stHeader"] { background:var(--surface); }
+    h1,h2,h3,h4,p { letter-spacing:0; }
+    .topbar { background:var(--surface); border:1px solid var(--line); padding:12px 16px; display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:14px; }
+    .brand { font-size:25px; font-weight:800; white-space:nowrap; }
+    .provider { color:var(--muted); font-size:13px; }
+    .provider-dot { color:#07845e; font-size:18px; vertical-align:-1px; }
+    .panel, .artifact { background:var(--surface); border:1px solid var(--line); padding:14px; margin-bottom:12px; }
+    .panel-title { font-size:18px; font-weight:800; margin-bottom:4px; }
+    .muted { color:var(--muted); font-size:12px; }
+    .selected-claim { font-size:20px; line-height:1.3; font-weight:750; margin:8px 0 12px; }
+    .claim-grid { display:grid; grid-template-columns:1.1fr 1.9fr; gap:12px; }
+    .metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; border-top:1px solid var(--line); padding-top:10px; }
+    .metric { border-right:1px solid var(--line); padding-right:8px; }.metric:last-child { border:0; }
+    .metric-label { display:block; color:var(--muted); font-size:11px; text-transform:uppercase; font-weight:700; }.metric strong { font-size:19px; }
+    .candidate { border:1px solid var(--line); padding:10px 12px; margin:7px 0; }.candidate-selected { border-left:4px solid var(--teal); background:#f7fcfc; }
+    .candidate-top { display:flex; align-items:center; gap:9px; font-size:13px; }.radio { color:var(--teal); font-size:18px; }.candidate-score { margin-left:auto; color:var(--teal); }.candidate-claim { font-weight:700; margin:6px 0; line-height:1.35; }.candidate-meta { color:#3f4758; font-size:12px; line-height:1.5; }
+    .activity-row { display:grid; grid-template-columns:30px 1fr auto; gap:10px; align-items:start; border-top:1px solid var(--line); padding:10px 0; }.agent-number { background:var(--indigo); color:#fff; width:24px; height:24px; text-align:center; padding-top:3px; font-weight:800; }.activity-row p { margin:3px 0 0; color:var(--muted); font-size:12px; }.status { margin-left:10px; color:var(--indigo); font-size:12px; font-weight:700; }.status-failed { color:var(--red); }.status-pending { color:var(--muted); }
+    .critique-row { display:grid; grid-template-columns:160px 1fr 45px; gap:10px; border-top:1px solid var(--line); padding:10px 0; font-size:13px; }.critique-row b { color:var(--amber); }
+    .evidence-item { border-top:1px solid var(--line); padding:11px 0; }.evidence-item p { font-size:13px; line-height:1.45; margin:5px 0; }.warning { color:var(--amber); }
+    .section-label { font-size:16px; font-weight:800; margin:12px 0 7px; }.warning-box { border-left:3px solid var(--amber); padding:8px 10px; background:#fffaf0; color:#815600; font-size:13px; margin:8px 0; }
+    @media (max-width: 760px) { .block-container { padding:0.65rem 0.65rem 2rem; }.topbar { padding:10px; }.brand { font-size:22px; }.provider { display:none; }.claim-grid { display:block; }.metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.metric:nth-child(2) { border:0; }.activity-row { grid-template-columns:28px 1fr; }.activity-row > .muted { grid-column:2; }.critique-row { grid-template-columns:1fr auto; }.critique-row span { grid-column:1 / -1; order:3; }.selected-claim { font-size:18px; } }
+    </style>
+    """, unsafe_allow_html=True)
 
 
-def metric_cards(report: AnalysisReport) -> None:
-    evidence_cards = sum(len(item.evidence) for item in report.assumptions)
-    html = f"""
-    <div class="metric-grid">
-        <div class="metric-card"><div class="metric-label">Claim Variants</div><div class="metric-value">{len(report.claim_variants)}</div></div>
-        <div class="metric-card"><div class="metric-label">Assumptions</div><div class="metric-value">{len(report.assumptions)}</div></div>
-        <div class="metric-card"><div class="metric-label">Evidence Cards</div><div class="metric-value">{evidence_cards}</div></div>
-        <div class="metric-card"><div class="metric-label">Opportunities</div><div class="metric-value">{len(report.idea_opportunities)}</div></div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+def session_defaults() -> None:
+    defaults = {"core_claim_result": None, "discovery_result": None, "direction": DEFAULT_DIRECTION, "provider_key": "", "provider_base": os.getenv("OPENAI_BASE_URL", ""), "provider_model": os.getenv("MODEL_NAME", "gpt-4o-mini")}
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
 
 
-def workflow_trace(report: AnalysisReport) -> None:
-    cards = []
-    for idx, step in enumerate(report.workflow_steps(), 1):
-        cards.append(
-            f"""
-            <div class="workflow-step">
-                <div class="workflow-index">{idx}</div>
-                <div class="workflow-title">{escape(step.name)}</div>
-                <div class="workflow-output">{escape(step.output)}</div>
-            </div>
-            """
-        )
-    st.markdown('<div class="workflow-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+def build_service() -> ClaimScopeService:
+    key = st.session_state.get("provider_key", "").strip()
+    base = st.session_state.get("provider_base", "").strip()
+    model = st.session_state.get("provider_model", "").strip() or "gpt-4o-mini"
+    client = OpenAICompatibleClient(api_key=st.session_state["provider_key"], base_url=base, model=model) if key and base else OpenAICompatibleClient.from_env()
+    return ClaimScopeService(llm_client=client)
 
 
-def status_class(status: str) -> str:
-    return {
-        "supported": "status-supported",
-        "mixed": "status-mixed",
-        "unsupported": "status-unsupported",
-        "unknown": "status-unknown",
-    }.get(status, "status-unknown")
-
-
-def render_opportunity_card(opportunity: IdeaOpportunity, rank: int) -> None:
-    linked = ", ".join(opportunity.linked_evidence) if opportunity.linked_evidence else "No linked evidence yet"
-    st.markdown(
-        f"""
-        <div class="opportunity-card">
-            <div class="opportunity-head">
-                <div>
-                    <div class="small-label">Opportunity {rank} / {escape(opportunity.kind.replace("_", " "))}</div>
-                    <div class="opportunity-title">{escape(opportunity.title)}</div>
-                </div>
-                <div class="score-pill">{opportunity.score}</div>
-            </div>
-            <div class="small-label">Why</div>
-            <div class="body-copy">{escape(opportunity.rationale)}</div>
-            <div class="small-label">Next Step</div>
-            <div class="body-copy">{escape(opportunity.next_step)}</div>
-            <div class="small-label">Linked Evidence</div>
-            <div class="body-copy">{escape(linked)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_assumption(assumption: Assumption) -> None:
-    label = f"{assumption.status.upper()} | risk: {assumption.risk}"
-    with st.expander(f"{assumption.text}  -  {label}", expanded=False):
-        st.markdown(
-            f"<span class='{status_class(assumption.status)}'>{escape(label)}</span>",
-            unsafe_allow_html=True,
-        )
-        st.write(
-            {
-                "support": assumption.support_query,
-                "contradict": assumption.contradict_query,
-                "limitation": assumption.limitation_query,
-                "null_result": assumption.null_result_query,
-            }
-        )
-        if assumption.evidence:
-            for evidence in assumption.evidence:
-                st.markdown(
-                    f"**[{evidence.stance}] {evidence.paper_title} ({evidence.year})**"
-                )
-                st.caption(evidence.snippet)
-        else:
-            st.caption("No direct evidence found in the retrieved set.")
-
-
-st.set_page_config(page_title="ClaimScope", page_icon="CS", layout="wide")
-inject_style()
-
-llm_client = OpenAICompatibleClient.from_env()
-
-with st.sidebar:
-    st.markdown("### Planning")
-    planner_options = ["Heuristic planner"]
-    if llm_client:
-        planner_options = ["LLM planner", "Heuristic planner"]
-    planner_mode = st.radio(
-        "Claim planner",
-        planner_options,
-        index=0,
-        help="The LLM planner uses your configured OpenAI-compatible endpoint.",
-    )
-    if llm_client:
-        st.success("API planner available")
-        st.caption("LLM mode sends the research direction to your configured endpoint.")
-    else:
-        st.warning("API planner not configured")
-        st.caption("Set OPENAI_API_KEY and OPENAI_BASE_URL to enable LLM planning.")
-    workflow_mode = st.radio(
-        "Test module",
-        ["Core Claim Test", "Full Discovery"],
-        index=0,
-        help="Core Claim Test runs only Research Direction -> Core Claim.",
-    )
-
-    st.markdown("### Retrieval")
-    mode = st.radio(
-        "Paper source",
-        ["Demo papers", "arXiv + Semantic Scholar"],
-        help="Demo mode is deterministic. Online mode uses public academic search APIs.",
-    )
-    limit = st.slider("Max papers", 5, 30, 12)
-    st.markdown("### Scope")
-    st.selectbox(
-        "Research stage",
-        ["Pre-ideation / exploration", "Claim stress test", "Opportunity ranking"],
-    )
-    st.selectbox(
-        "Domain lens",
-        ["All domains", "AI / CS", "Medical AI", "RAG / GraphRAG"],
-    )
-
-st.markdown(
-    """
-    <div class="hero">
-        <h1>ClaimScope</h1>
-        <p>Assumption-Centric Research Discovery / Claim-to-Opportunity Engine</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-claim = st.text_area(
-    "Research direction",
-    value="RAG can reliably reduce hallucination in LLM-generated answers",
-    height=105,
-)
-
-button_label = "Extract Core Claim" if workflow_mode == "Core Claim Test" else "Run Discovery"
-analyze = st.button(button_label, type="primary", use_container_width=True)
-
-if analyze:
-    if not claim.strip():
-        st.warning("Enter a research direction or claim first.")
-        st.stop()
-
-    planner = HeuristicClaimPlanner()
-    if planner_mode == "LLM planner" and llm_client:
-        planner = LLMClaimPlanner(llm_client=llm_client)
-
-    if workflow_mode == "Core Claim Test":
-        with st.spinner("Extracting core claim only..."):
-            core_claim = ClaimScopePipeline(
-                retriever=StaticPaperRetriever([]),
-                planner=planner,
-            ).extract_core_claim(claim)
-
-        if isinstance(planner, LLMClaimPlanner):
-            if planner.used_planner == "heuristic":
-                st.warning(planner.fallback_reason)
-            else:
-                st.info("LLM Core Claim module used. Downstream modules did not run.")
-
-        st.markdown(
-            f"""
-            <div class="callout">
-                <div class="small-label">Input Research Direction</div>
-                <div class="body-copy">{escape(claim)}</div>
-            </div>
-            <div class="callout">
-                <div class="small-label">Core Claim</div>
-                <div class="body-copy">{escape(core_claim)}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown("#### Module Test Status")
-        st.table(
-            [
-                {"Module": "Research Direction", "Status": "ran", "Output": claim},
-                {"Module": "Core Claim", "Status": "ran", "Output": core_claim},
-                {"Module": "Claim Variants / Boundary Conditions", "Status": "off", "Output": ""},
-                {"Module": "Hidden Assumptions", "Status": "off", "Output": ""},
-                {"Module": "Evidence Queries", "Status": "off", "Output": ""},
-                {"Module": "Evidence Cards", "Status": "off", "Output": ""},
-                {"Module": "Idea Opportunities", "Status": "off", "Output": ""},
-            ]
-        )
-        st.markdown("#### Your Evaluation")
-        st.code(
-            "Input:\n"
-            f"{claim}\n\n"
-            "Observed Core Claim:\n"
-            f"{core_claim}\n\n"
-            "Expected Core Claim:\n\n"
-            "Pass / Partial / Fail:\n\n"
-            "Notes:\n",
-            language="text",
-        )
-        st.stop()
-
-    if mode == "arXiv + Semantic Scholar":
-        retriever = CombinedRetriever([SemanticScholarRetriever(), ArxivRetriever()])
-    else:
-        retriever = StaticPaperRetriever(DEMO_PAPERS)
-
-    with st.spinner("Running assumption-centric discovery workflow..."):
-        report = ClaimScopePipeline(retriever=retriever, planner=planner).analyze(
-            claim, limit=limit
-        )
-
-    if isinstance(planner, LLMClaimPlanner):
-        if planner.used_planner == "heuristic":
-            st.warning(planner.fallback_reason)
-        else:
-            st.info("LLM planner used for claim decomposition and query generation.")
-
-    st.markdown(
-        f"""
-        <div class="callout">
-            <div class="small-label">Core Claim</div>
-            <div class="body-copy">{escape(report.claim)}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    metric_cards(report)
-
-    workflow_tab, matrix_tab, assumptions_tab, opportunities_tab, evidence_tab, markdown_tab = st.tabs(
-        [
-            "Workflow Trace",
-            "Evidence Matrix",
-            "Assumptions",
-            "Opportunities",
-            "Evidence",
-            "Markdown",
-        ]
-    )
-
-    with workflow_tab:
-        st.markdown('<div class="section-title">Claim-to-Opportunity Workflow</div>', unsafe_allow_html=True)
-        workflow_trace(report)
-        left, right = st.columns([1.2, 0.8])
+def render_topbar(mode: str) -> None:
+    with st.container():
+        left, right = st.columns([1.6, 1.4])
         with left:
-            st.markdown("#### Claim Variants / Boundary Conditions")
-            for variant in report.claim_variants:
-                st.markdown(f"**{variant.text}**")
-                st.caption(variant.rationale)
+            st.markdown('<div class="topbar"><span class="brand">ClaimScope</span></div>', unsafe_allow_html=True)
         with right:
-            st.markdown("#### Top Opportunity Signals")
-            for idx, opportunity in enumerate(report.idea_opportunities[:3], 1):
-                render_opportunity_card(opportunity, idx)
+            with st.popover("Provider"):
+                st.text_input("API key", type="password", key="provider_key", help="Session-only; never exported or logged.")
+                st.text_input("Base URL", key="provider_base")
+                st.text_input("Model", key="provider_model")
+                st.caption(f"Host: {provider_host(st.session_state.get('provider_base', ''))}")
+            health = "configured" if st.session_state.get("provider_key") and st.session_state.get("provider_base") else "demo / heuristic"
+            st.markdown(f'<div class="topbar provider"><span class="provider-dot">●</span> Provider: {escape(health)}</div>', unsafe_allow_html=True)
 
-    with matrix_tab:
-        st.markdown('<div class="section-title">Assumption Evidence Matrix</div>', unsafe_allow_html=True)
-        st.table(report.assumption_matrix())
 
-    with assumptions_tab:
-        st.markdown('<div class="section-title">Hidden Assumptions and Query Matrix</div>', unsafe_allow_html=True)
-        for assumption in report.assumptions:
-            render_assumption(assumption)
+def render_core_claim(result: dict | None) -> None:
+    if not result:
+        st.info("Run the arena to compare public candidate claims and critiques.")
+        return
+    selected = result.get("selected_candidate") or {}
+    confidence = float(selected.get("confidence", 0))
+    st.markdown(f"""<section class="panel"><div class="panel-title">Selected Core Claim</div><div class="selected-claim">{escape(str(result.get('selected_claim', '')))}</div><div class="metrics">{''.join([f'<div class="metric"><span class="metric-label">Confidence</span><strong>{confidence:.2f}</strong><small>{confidence_label(confidence)}</small></div>', f'<div class="metric"><span class="metric-label">Mode</span><strong>{escape(str(result.get("mode", "heuristic")))}</strong></div>', f'<div class="metric"><span class="metric-label">Falsification test</span><strong>{escape(str(selected.get("falsification_test", "Not specified")))}</strong></div>', f'<div class="metric"><span class="metric-label">Missing information</span><strong>{len(result.get("unresolved_ambiguities", []))}</strong></div>'])}</div></section>""", unsafe_allow_html=True)
+    if result.get("degraded"):
+        st.markdown('<div class="warning-box">This run used a deterministic fallback for one or more agent stages.</div>', unsafe_allow_html=True)
+    st.markdown('<section class="panel"><div class="panel-title">Agent activity</div>' + render_activity(result) + '</section>', unsafe_allow_html=True)
+    candidates = result.get("candidates", [])
+    st.markdown('<section class="panel"><div class="panel-title">Candidate comparison</div>' + "".join(render_candidate(candidate, candidate is selected or candidate.get("claim") == selected.get("claim"), index) for index, candidate in enumerate(candidates, 1)) + '</section>', unsafe_allow_html=True)
+    st.markdown('<section class="panel"><div class="panel-title">Critique summary</div>' + render_critique_summary(result) + '</section>', unsafe_allow_html=True)
 
-    with opportunities_tab:
-        st.markdown('<div class="section-title">Ranked Idea Opportunities</div>', unsafe_allow_html=True)
-        for idx, opportunity in enumerate(report.idea_opportunities, 1):
-            render_opportunity_card(opportunity, idx)
 
-    with evidence_tab:
-        paper_col, negative_col = st.columns([1.1, 0.9])
-        with paper_col:
-            st.markdown("#### Retrieved Papers")
-            if report.papers:
-                for paper in report.papers:
-                    st.markdown(f"**{paper.title}** ({paper.year or 'n.d.'})")
-                    st.caption(f"{paper.source} | {', '.join(paper.authors[:3])}")
-                    st.write(paper.abstract)
-                    if paper.url:
-                        st.markdown(f"[Open paper]({paper.url})")
-                    st.divider()
-            else:
-                st.info("No papers were retrieved.")
-        with negative_col:
-            st.markdown("#### Negative Evidence")
-            if report.negative_evidence:
-                for item in report.negative_evidence:
-                    st.markdown(f"**{item.kind.replace('_', ' ').title()}**")
-                    st.write(f"{item.paper_title} ({item.year}): {item.text}")
-                    st.caption(item.implication)
-                    st.divider()
-            else:
-                st.info("No explicit negative evidence was found.")
-
-    with markdown_tab:
-        markdown = report.to_markdown()
-        st.download_button(
-            "Download Markdown Report",
-            data=markdown,
-            file_name="claimscope_report.md",
-            mime="text/markdown",
-        )
+def render_discovery(report: dict | None) -> None:
+    if not report:
+        st.info("Run Full Discovery to map assumptions, evidence, and opportunities.")
+        return
+    st.markdown(f'<section class="panel"><div class="panel-title">Selected Core Claim</div><div class="selected-claim">{escape(str(report.get("claim", "")))}</div></section>', unsafe_allow_html=True)
+    overview, ledger, evidence, opportunities, trace, export = st.tabs(["Overview", "Assumption Ledger", "Evidence", "Opportunities", "Trace", "Export"])
+    with overview:
+        st.markdown("### Workflow overview")
+        st.write({"assumptions": len(report.get("assumptions", [])), "papers": len(report.get("papers", [])), "opportunities": len(report.get("idea_opportunities", []))})
+        for warning in report.get("warnings", []): st.markdown(f'<div class="warning-box">{escape(str(warning))}</div>', unsafe_allow_html=True)
+    with ledger:
+        for assumption in report.get("assumptions", []):
+            st.markdown(f'<article class="artifact"><strong>{escape(str(assumption.get("text", "")))}</strong><span class="status">{escape(str(assumption.get("status", "unknown")))}</span><p class="muted">Risk: {escape(str(assumption.get("risk", "medium")))}</p></article>', unsafe_allow_html=True)
+    with evidence:
+        st.markdown(render_discovery_evidence(report), unsafe_allow_html=True)
+    with opportunities:
+        for opportunity in report.get("idea_opportunities", []): st.markdown(f'<article class="artifact"><strong>{escape(str(opportunity.get("title", "")))}</strong><p>{escape(str(opportunity.get("rationale", "")))}</p><p class="muted">Next: {escape(str(opportunity.get("next_step", "")))}</p></article>', unsafe_allow_html=True)
+    with trace:
+        st.markdown('<section class="panel"><div class="panel-title">Agent activity</div>' + render_activity({"events": report.get("events", [])}) + '</section>', unsafe_allow_html=True)
+    with export:
+        markdown = report_markdown(report)
+        st.download_button("Download Markdown report", markdown, "claimscope_report.md", "text/markdown")
         st.code(markdown, language="markdown")
-else:
-    st.markdown(
-        """
-        <div class="callout">
-            <div class="small-label">Current Test Mode</div>
-            <div class="body-copy">Start with Core Claim Test. It runs only Research Direction -> Core Claim; downstream modules stay off until you switch to Full Discovery.</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+
+
+def render_feedback(direction: str, observed: str) -> None:
+    with st.expander("Evaluate observed claim"):
+        expected = st.text_area("Expected claim", key="feedback_expected")
+        rating = st.selectbox("Rating", ["Pass", "Partial", "Fail"], key="feedback_rating")
+        notes = st.text_area("Notes", key="feedback_notes")
+        st.download_button("Download feedback JSONL", feedback_jsonl(direction, observed, expected, rating, notes), "claimscope_feedback.jsonl", "application/jsonl")
+
+
+def main() -> None:
+    st.set_page_config(page_title="ClaimScope", page_icon="CS", layout="wide")
+    session_defaults()
+    inject_style()
+    if hasattr(st, "segmented_control"):
+        mode = st.segmented_control("Mode", ["Core Claim Arena", "Full Discovery"], default="Core Claim Arena", label_visibility="collapsed")
+    else:
+        mode = st.radio("Mode", ["Core Claim Arena", "Full Discovery"], horizontal=True, label_visibility="collapsed")
+    render_topbar(mode)
+    left, right = st.columns([1, 1.35])
+    with left:
+        st.markdown('<section class="panel"><div class="panel-title">Research direction</div><p class="muted">Describe the fuzzy direction you want to stress-test.</p>', unsafe_allow_html=True)
+        direction = st.text_area("Research direction", key="direction", height=130, label_visibility="collapsed")
+        st.caption("Examples: retrieval quality and hallucination; causal mechanism and measurable outcome.")
+        if mode == "Core Claim Arena":
+            st.caption("Retrieval controls are disabled in Core Claim mode.")
+        else:
+            online = st.toggle("Use online academic retrieval", value=False)
+            limit = st.slider("Maximum papers", 5, 30, 12)
+        run = st.button("Run Arena" if mode == "Core Claim Arena" else "Run Discovery", type="primary", use_container_width=True)
+        st.markdown('</section>', unsafe_allow_html=True)
+    with right:
+        if mode == "Core Claim Arena": render_core_claim(st.session_state.get("core_claim_result"))
+        else: render_discovery(st.session_state.get("discovery_result"))
+    if run:
+        if not direction.strip(): st.warning("Enter a research direction first.")
+        else:
+            service = build_service()
+            with st.spinner("Running public research analysis..."):
+                if mode == "Core Claim Arena": st.session_state["core_claim_result"] = service.extract_core_claim(direction)
+                else: st.session_state["discovery_result"] = service.analyze_research_direction(direction, online=online, limit=limit)
+            st.rerun()
+    if mode == "Core Claim Arena":
+        result = st.session_state.get("core_claim_result") or {}
+        render_feedback(direction, str(result.get("selected_claim", "")))
+
+
+if __name__ == "__main__":
+    main()
