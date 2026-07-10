@@ -118,6 +118,15 @@ $env:OPENAI_API_KEY="your-key"
 $env:MODEL_NAME="your-model"
 ```
 
+Run the ClaimScope MCP server over stdio for an MCP client:
+
+```powershell
+python -m claimscope.mcp_server
+```
+
+The server uses the same environment variables above for optional LLM planning;
+offline demo tools work without a key.
+
 The core pipeline runs without an LLM key through the deterministic heuristic
 planner. When the environment variables above are present, the LLM planner can
 turn fuzzy research directions into domain-specific claim variants, hidden

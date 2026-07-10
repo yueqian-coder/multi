@@ -13,11 +13,13 @@ from .models import (
 from .pipeline import ClaimScopePipeline
 from .planner import HeuristicClaimPlanner, LLMClaimPlanner
 from .retrievers import StaticPaperRetriever
+from .service import ClaimScopeService
 
 __all__ = [
     "AnalysisReport",
     "Assumption",
     "ClaimScopePipeline",
+    "ClaimScopeService",
     "ClaimVariant",
     "EvidenceItem",
     "HeuristicClaimPlanner",

@@ -5,6 +5,7 @@ __pycache__/
 .superpowers/
 *.pyc
 *.pyo
+*.egg-info/
 .env
 .env.*
 !.env.example

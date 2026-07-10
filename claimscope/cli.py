@@ -6,50 +6,11 @@ from pathlib import Path
 
 from .benchmark import load_cases, run_benchmark
 from .core_claim import HeuristicCoreClaimEngine
-from .models import Paper
 from .pipeline import ClaimScopePipeline
 from .planner import HeuristicClaimPlanner, LLMClaimPlanner
 from .llm import OpenAICompatibleClient
 from .retrievers import ArxivRetriever, CombinedRetriever, SemanticScholarRetriever, StaticPaperRetriever
-
-
-DEMO_PAPERS = [
-    Paper(
-        title="Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
-        year=2020,
-        authors=["Lewis et al."],
-        abstract=(
-            "Retrieval-augmented generation improves factuality for knowledge-intensive "
-            "question answering by conditioning answers on retrieved evidence. However, "
-            "performance depends strongly on retrieval quality, and noisy passages can "
-            "hurt generation."
-        ),
-        source="demo",
-        url="https://arxiv.org/abs/2005.11401",
-    ),
-    Paper(
-        title="Evaluating Retrieval-Augmented Language Models for Factuality",
-        year=2023,
-        authors=["Chen et al."],
-        abstract=(
-            "RAG can reduce hallucination on open-domain QA when evidence is relevant. "
-            "The gains are smaller under domain shift, and citation mismatch remains a "
-            "common failure mode."
-        ),
-        source="demo",
-    ),
-    Paper(
-        title="On the Limits of Retrieval-Augmented Generation",
-        year=2024,
-        authors=["Patel et al."],
-        abstract=(
-            "We find no consistent improvement for long-form generation when retrieved "
-            "documents are irrelevant. Limitations include retrieval noise, unsupported "
-            "claims, and brittle evaluation metrics."
-        ),
-        source="demo",
-    ),
-]
+from .service import DEMO_PAPERS
 
 
 def main() -> None:

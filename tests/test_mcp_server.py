@@ -1,0 +1,148 @@
+import importlib
+import json
+import subprocess
+import sys
+import textwrap
+from importlib.metadata import entry_points
+from pathlib import Path
+
+from claimscope.service import ClaimScopeService
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class _InjectedPlanner:
+    def extract_core_claim(self, direction: str) -> str:
+        return f"Injected claim for {direction}"
+
+
+def test_service_uses_injected_heuristic_planner():
+    service = ClaimScopeService(heuristic_planner=_InjectedPlanner())
+
+    payload = service.extract_core_claim("a research direction", mode="heuristic")
+
+    assert payload["selected_claim"] == "Injected claim for a research direction"
+
+
+def test_mcp_module_import_has_no_server_side_effect():
+    module = importlib.import_module("claimscope.mcp_server")
+
+    assert module.mcp.name == "ClaimScope"
+
+
+def test_extract_core_claim_tool_returns_json_compatible_trace():
+    module = importlib.import_module("claimscope.mcp_server")
+
+    payload = module.extract_core_claim_payload(
+        "Can retrieval make medical QA safer?", mode="heuristic"
+    )
+
+    json.dumps(payload)
+    assert payload["selected_claim"]
+    assert payload["events"]
+    assert payload["mode"] == "heuristic"
+
+
+def test_analyze_research_direction_payload_is_keyless_offline_by_default():
+    module = importlib.import_module("claimscope.mcp_server")
+
+    payload = module.analyze_research_direction_payload(
+        "RAG can reduce hallucination in LLM-generated answers",
+        online=False,
+        limit=6,
+    )
+
+    assert payload["claim"]
+    assert payload["papers"]
+    assert all(item["is_fixture"] for item in payload["papers"])
+    assert json.loads(json.dumps(payload)) == payload
+
+
+def test_build_evidence_queries_payload_exposes_assumption_queries_without_retrieval():
+    module = importlib.import_module("claimscope.mcp_server")
+
+    payload = module.build_evidence_queries_payload(
+        "Diffusion models improve MRI tumor segmentation with limited labels"
+    )
+
+    assert payload["claim"]
+    assert payload["assumptions"]
+    assert payload["queries"]
+    assert {item["kind"] for item in payload["queries"]} >= {
+        "support",
+        "contradict",
+        "limitation",
+        "null_result",
+    }
+    assert json.loads(json.dumps(payload)) == payload
+
+
+def test_benchmark_and_demo_payloads_are_json_compatible():
+    module = importlib.import_module("claimscope.mcp_server")
+
+    benchmark_payload = module.evaluate_claim_benchmark_payload()
+    demo_payload = module.get_demo_report_payload()
+
+    assert benchmark_payload["summary"]["case_count"] >= 24
+    assert benchmark_payload["case_results"]
+    assert demo_payload["markdown"].startswith("# ClaimScope Report")
+    assert demo_payload["report"]["papers"]
+    json.dumps(benchmark_payload)
+    json.dumps(demo_payload)
+
+
+def test_package_console_scripts_are_declared():
+    scripts = {
+        item.name: item.value
+        for item in entry_points(group="console_scripts")
+        if item.name in {"claimscope", "claimscope-mcp"}
+    }
+
+    assert scripts["claimscope"] == "claimscope.cli:main"
+    assert scripts["claimscope-mcp"] == "claimscope.mcp_server:main"
+
+
+def test_mcp_stdio_initialize_and_list_tools_smoke():
+    script = textwrap.dedent(
+        """
+        import asyncio
+        import json
+        import sys
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        async def main():
+            params = StdioServerParameters(
+                command=sys.executable,
+                args=["-m", "claimscope.mcp_server"],
+                cwd=r"%s",
+            )
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    tools = await session.list_tools()
+                    print(json.dumps(sorted(tool.name for tool in tools.tools)))
+
+        asyncio.run(main())
+        """
+        % str(REPO_ROOT)
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == [
+        "analyze_research_direction",
+        "build_evidence_queries",
+        "evaluate_claim_benchmark",
+        "extract_core_claim",
+        "get_demo_report",
+    ]
