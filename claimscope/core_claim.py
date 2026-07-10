@@ -128,8 +128,12 @@ class CoreClaimArena:
             critiques.extend(critique)
             critic_events.append(event)
 
-        selected_candidate, final_claim, ambiguities, judge_event, degraded = (
+        selected_candidate, final_claim, ambiguities, judge_event, judge_degraded = (
             self._run_judge(direction, candidates, critiques)
+        )
+        events = proposer_events + critic_events + [judge_event]
+        degraded = judge_degraded or any(
+            event.status == "failed" for event in proposer_events + critic_events
         )
         return CoreClaimResult(
             direction=direction,
@@ -137,7 +141,7 @@ class CoreClaimArena:
             selected_candidate=selected_candidate,
             candidates=candidates,
             critiques=critiques,
-            events=proposer_events + critic_events + [judge_event],
+            events=events,
             unresolved_ambiguities=ambiguities,
             mode="multi_agent",
             degraded=degraded,
@@ -180,23 +184,32 @@ class CoreClaimArena:
 
     def _run_proposer(
         self, direction: str, role: str, rubric: str
-    ) -> tuple[ClaimCandidate, AgentEvent]:
+    ) -> tuple[ClaimCandidate | None, AgentEvent]:
         started = perf_counter()
-        content = self.llm_client.chat(
-            _proposer_messages(direction, role, rubric),
-            temperature=0.2,
-            timeout=self.timeout,
-        )
-        payload = _extract_json_object(content)
-        candidate = _payload_to_candidate(payload, proposer=role)
-        return candidate, _event(
-            role=role,
-            status="complete",
-            public_summary="Proposed one public core-claim candidate.",
-            started=started,
-            artifacts={"candidate_id": role},
-            scores={"candidate_score": candidate.score()},
-        )
+        try:
+            content = self.llm_client.chat(
+                _proposer_messages(direction, role, rubric),
+                temperature=0.2,
+                timeout=self.timeout,
+            )
+            payload = _extract_json_object(content)
+            candidate = _payload_to_candidate(payload, proposer=role)
+            return candidate, _event(
+                role=role,
+                status="complete",
+                public_summary="Proposed one public core-claim candidate.",
+                started=started,
+                artifacts={"candidate_id": role},
+                scores={"candidate_score": candidate.score()},
+            )
+        except Exception:
+            return None, _event(
+                role=role,
+                status="failed",
+                public_summary="The proposer did not return a usable public claim.",
+                started=started,
+                artifacts={},
+            )
 
     def _run_critic(
         self,
@@ -213,7 +226,11 @@ class CoreClaimArena:
                 timeout=self.timeout,
             )
             payload = _extract_json_object(content)
-            critiques = _payload_to_critiques(payload, critic=role)
+            critiques = _payload_to_critiques(
+                payload,
+                critic=role,
+                candidate_ids={candidate.proposer for candidate in candidates},
+            )
             return critiques, _event(
                 role=role,
                 status="complete",
@@ -533,24 +550,36 @@ def _payload_to_candidate(payload: dict, proposer: str) -> ClaimCandidate:
     )
 
 
-def _payload_to_critiques(payload: dict, critic: str) -> list[ClaimCritique]:
+def _payload_to_critiques(
+    payload: dict, critic: str, candidate_ids: set[str]
+) -> list[ClaimCritique]:
     raw_critiques = payload.get("critiques")
-    if not isinstance(raw_critiques, list):
-        return []
+    if not isinstance(raw_critiques, list) or not raw_critiques:
+        raise ValueError("critic response must include critiques")
     critiques: list[ClaimCritique] = []
+    seen_candidate_ids: set[str] = set()
     for item in raw_critiques:
         if not isinstance(item, dict):
-            continue
+            raise ValueError("critique item must be an object")
         candidate_id = _coerce_text(item.get("candidate_id"))
-        if not candidate_id:
-            continue
+        if not candidate_id or candidate_id not in candidate_ids:
+            raise ValueError("critique candidate_id is unknown")
+        if candidate_id in seen_candidate_ids:
+            raise ValueError("duplicate critique candidate_id")
+        seen_candidate_ids.add(candidate_id)
+        reason_codes = _coerce_string_list(item.get("reason_codes"))
+        revision = _coerce_text(item.get("revision"))
+        if not reason_codes:
+            raise ValueError("critique reason_codes must be non-empty")
+        if not revision:
+            raise ValueError("critique revision must be non-empty")
         critiques.append(
             ClaimCritique(
                 candidate_id=candidate_id,
                 critic=critic,
                 rubric_scores=_rubric_scores(item.get("rubric_scores")),
-                reason_codes=_coerce_string_list(item.get("reason_codes")),
-                revision=_coerce_text(item.get("revision")),
+                reason_codes=reason_codes,
+                revision=revision,
                 public_summary=_coerce_text(item.get("public_summary")),
             )
         )
@@ -559,7 +588,13 @@ def _payload_to_critiques(payload: dict, critic: str) -> list[ClaimCritique]:
 
 def _rubric_scores(raw_scores: object) -> dict[str, float]:
     if not isinstance(raw_scores, dict):
-        return {}
+        raise ValueError("critique rubric_scores must be an object")
+    missing_keys = [key for key in RUBRIC_KEYS if key not in raw_scores]
+    if missing_keys:
+        raise ValueError("critique rubric_scores missing required keys")
+    for key in RUBRIC_KEYS:
+        if not isinstance(raw_scores.get(key), (int, float)):
+            raise ValueError("critique rubric_scores must be numeric")
     return {
         key: max(0.0, min(5.0, _coerce_float(raw_scores.get(key), default=0.0)))
         for key in RUBRIC_KEYS
@@ -604,7 +639,7 @@ def _candidate_by_id(
     for candidate in candidates:
         if candidate.proposer == candidate_id:
             return candidate
-    return _fallback_candidate(candidates)
+    raise ValueError("unknown selected_candidate_id")
 
 
 def _fallback_candidate(candidates: list[ClaimCandidate]) -> ClaimCandidate:

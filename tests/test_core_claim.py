@@ -1,6 +1,8 @@
 import importlib
 import io
 import json
+import threading
+import time
 import urllib.error
 
 import pytest
@@ -141,6 +143,106 @@ class JudgeFailingFakeLLM(RoleAwareFakeLLM):
         if "judge" in content:
             raise RuntimeError("judge unavailable")
         return super().chat(messages, temperature=temperature, timeout=timeout)
+
+
+class UnknownJudgeIdFakeLLM(RoleAwareFakeLLM):
+    def chat(self, messages, temperature=0.2, timeout=None):
+        content = "\n".join(message["content"] for message in messages)
+        if "judge" in content:
+            return json.dumps(
+                {
+                    "selected_candidate_id": "untrusted_candidate",
+                    "final_claim": "Arbitrary judge claim from an invalid candidate.",
+                    "falsification_test": "Untrusted judge test.",
+                    "unresolved_ambiguities": [],
+                }
+            )
+        return super().chat(messages, temperature=temperature, timeout=timeout)
+
+
+class FailingProposerFakeLLM(RoleAwareFakeLLM):
+    def chat(self, messages, temperature=0.2, timeout=None):
+        content = "\n".join(message["content"] for message in messages)
+        if "operationalizer" in content:
+            time.sleep(0.03)
+            raise RuntimeError("proposer unavailable")
+        return super().chat(messages, temperature=temperature, timeout=timeout)
+
+
+class FailingCriticFakeLLM(RoleAwareFakeLLM):
+    def chat(self, messages, temperature=0.2, timeout=None):
+        content = "\n".join(message["content"] for message in messages)
+        if "scope_critic" in content:
+            raise RuntimeError("critic unavailable")
+        return super().chat(messages, temperature=temperature, timeout=timeout)
+
+
+class CritiqueShapeFakeLLM(RoleAwareFakeLLM):
+    def __init__(self, critique_payload):
+        super().__init__()
+        self.critique_payload = critique_payload
+
+    def chat(self, messages, temperature=0.2, timeout=None):
+        content = "\n".join(message["content"] for message in messages)
+        if "falsifiability_critic" in content:
+            return json.dumps(self.critique_payload)
+        return super().chat(messages, temperature=temperature, timeout=timeout)
+
+
+class ConcurrentTrackingFakeLLM(RoleAwareFakeLLM):
+    def __init__(self):
+        super().__init__()
+        self.active_proposers = 0
+        self.max_active_proposers = 0
+        self.lock = threading.Lock()
+
+    def chat(self, messages, temperature=0.2, timeout=None):
+        content = "\n".join(message["content"] for message in messages)
+        if any(role in content for role in _proposer_role_names()):
+            with self.lock:
+                self.active_proposers += 1
+                self.max_active_proposers = max(
+                    self.max_active_proposers, self.active_proposers
+                )
+            try:
+                time.sleep(0.02)
+                return super().chat(messages, temperature=temperature, timeout=timeout)
+            finally:
+                with self.lock:
+                    self.active_proposers -= 1
+        return super().chat(messages, temperature=temperature, timeout=timeout)
+
+
+def _complete_rubric_scores(**overrides):
+    scores = {
+        "specificity": 4,
+        "falsifiability": 4,
+        "mechanism": 4,
+        "scope": 4,
+        "measurability": 4,
+        "risk_awareness": 4,
+    }
+    scores.update(overrides)
+    return scores
+
+
+def _critique(candidate_id="mechanism_analyst", **overrides):
+    item = {
+        "candidate_id": candidate_id,
+        "rubric_scores": _complete_rubric_scores(),
+        "reason_codes": ["bounded_context"],
+        "revision": "Bounded revision for the selected candidate.",
+    }
+    item.update(overrides)
+    return item
+
+
+def _proposer_role_names():
+    return {
+        "operationalizer",
+        "mechanism_analyst",
+        "skeptical_empiricist",
+    }
 
 
 def _load_core_claim_engine():
@@ -291,6 +393,126 @@ def test_arena_falls_back_to_weighted_candidate_when_judge_fails():
     assert result.selected_candidate == max(
         result.candidates, key=lambda item: item.score()
     )
+
+
+def test_arena_rejects_unknown_judge_candidate_id_as_degraded_fallback():
+    module = importlib.import_module("claimscope.core_claim")
+
+    result = module.CoreClaimArena(UnknownJudgeIdFakeLLM()).run(
+        "Can retrieval make medical QA safer?"
+    )
+
+    assert result.degraded is True
+    assert result.selected_candidate == max(
+        result.candidates, key=lambda item: item.score()
+    )
+    assert result.selected_claim == result.selected_candidate.claim
+    assert "Arbitrary judge claim" not in result.selected_claim
+    assert result.events[-1].role == "judge"
+    assert result.events[-1].status == "degraded"
+
+
+def test_arena_marks_result_degraded_when_required_proposer_fails():
+    module = importlib.import_module("claimscope.core_claim")
+
+    result = module.CoreClaimArena(FailingProposerFakeLLM()).run(
+        "Can retrieval make medical QA safer?"
+    )
+
+    failed_events = [
+        event for event in result.events if event.role == "operationalizer"
+    ]
+    assert result.degraded is True
+    assert failed_events
+    assert failed_events[0].status == "failed"
+    assert failed_events[0].duration_ms >= 20
+
+
+def test_arena_marks_result_degraded_when_required_critic_fails():
+    module = importlib.import_module("claimscope.core_claim")
+
+    result = module.CoreClaimArena(FailingCriticFakeLLM()).run(
+        "Can retrieval make medical QA safer?"
+    )
+
+    assert result.degraded is True
+    assert any(
+        event.role == "scope_critic" and event.status == "failed"
+        for event in result.events
+    )
+
+
+@pytest.mark.parametrize(
+    "critique_payload",
+    [
+        {"critiques": [_critique("unknown_candidate")]},
+        {"critiques": [_critique(), _critique()]},
+        {
+            "critiques": [
+                _critique(
+                    rubric_scores={
+                        key: value
+                        for key, value in _complete_rubric_scores().items()
+                        if key != "scope"
+                    }
+                )
+            ]
+        },
+        {"critiques": [_critique(rubric_scores=_complete_rubric_scores(scope="bad"))]},
+        {"critiques": [_critique(reason_codes=[])]},
+        {"critiques": [_critique(revision="")]},
+    ],
+)
+def test_malformed_critique_response_fails_that_critic(critique_payload):
+    module = importlib.import_module("claimscope.core_claim")
+
+    result = module.CoreClaimArena(CritiqueShapeFakeLLM(critique_payload)).run(
+        "Can retrieval make medical QA safer?"
+    )
+
+    assert result.degraded is True
+    assert not any(
+        item.critic == "falsifiability_critic" for item in result.critiques
+    )
+    assert any(
+        event.role == "falsifiability_critic" and event.status == "failed"
+        for event in result.events
+    )
+
+
+def test_critique_rubric_scores_are_clamped_when_complete_and_numeric():
+    module = importlib.import_module("claimscope.core_claim")
+    payload = {
+        "critiques": [
+            _critique(
+                rubric_scores=_complete_rubric_scores(
+                    specificity=-2,
+                    falsifiability=7,
+                )
+            )
+        ]
+    }
+
+    result = module.CoreClaimArena(CritiqueShapeFakeLLM(payload)).run(
+        "Can retrieval make medical QA safer?"
+    )
+
+    critique = next(
+        item for item in result.critiques if item.critic == "falsifiability_critic"
+    )
+    assert critique.rubric_scores["specificity"] == 0.0
+    assert critique.rubric_scores["falsifiability"] == 5.0
+
+
+def test_arena_bounds_proposer_concurrency_to_three_workers():
+    module = importlib.import_module("claimscope.core_claim")
+    client = ConcurrentTrackingFakeLLM()
+
+    module.CoreClaimArena(client, max_workers=99).run(
+        "Can retrieval make medical QA safer?"
+    )
+
+    assert client.max_active_proposers == 3
 
 
 def test_llm_client_retries_transient_http_error_with_timeout(monkeypatch):
