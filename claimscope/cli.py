@@ -4,6 +4,8 @@ import argparse
 import sys
 from pathlib import Path
 
+from .benchmark import load_cases, run_benchmark
+from .core_claim import HeuristicCoreClaimEngine
 from .models import Paper
 from .pipeline import ClaimScopePipeline
 from .planner import HeuristicClaimPlanner, LLMClaimPlanner
@@ -51,6 +53,13 @@ DEMO_PAPERS = [
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "benchmark":
+        _run_benchmark_cli(sys.argv[2:])
+        return
+    _run_analysis_cli(sys.argv[1:])
+
+
+def _run_analysis_cli(argv: list[str]) -> None:
     parser = argparse.ArgumentParser(description="Run a ClaimScope analysis.")
     parser.add_argument("claim", help="Research direction or claim to inspect")
     parser.add_argument(
@@ -66,7 +75,7 @@ def main() -> None:
         default="heuristic",
         help="Use the deterministic planner or an env-configured OpenAI-compatible LLM planner.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.online:
         retriever = CombinedRetriever([SemanticScholarRetriever(), ArxivRetriever()])
@@ -93,6 +102,40 @@ def main() -> None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(markdown, encoding="utf-8")
     print(markdown)
+
+
+def _run_benchmark_cli(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(
+        description="Run the deterministic ClaimBench benchmark."
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["heuristic"],
+        default="heuristic",
+        help="Benchmark engine. CI-safe heuristic mode does not require keys or network.",
+    )
+    parser.add_argument(
+        "--data",
+        type=Path,
+        default=Path("benchmarks") / "claimbench.jsonl",
+        help="Path to ClaimBench JSONL cases.",
+    )
+    parser.add_argument("--output", type=Path, help="Optional JSON report path.")
+    args = parser.parse_args(argv)
+
+    engine = HeuristicCoreClaimEngine()
+    cases = load_cases(args.data)
+    report = run_benchmark(cases, engine)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report.to_json(), encoding="utf-8")
+    summary = report.summary
+    print(
+        "ClaimBench: "
+        f"{summary['case_count']} cases, "
+        f"aggregate score {summary['aggregate_score']} "
+        f"({summary['engine']})"
+    )
 
 
 if __name__ == "__main__":
