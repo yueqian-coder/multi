@@ -93,3 +93,48 @@ These checks were rerun after commit `6139c25`.
 - Score penalties are public and inspectable through `ClaimScore.to_dict()` and report JSON.
 - The benchmark CLI remains offline and keyless.
 - The `.superpowers/` report path is ignored by repo policy unless explicitly force-added.
+
+## Final Dispatch Fix
+
+### Requested Follow-Up
+
+- `_has_explicit_benchmark_option()` now recognizes every benchmark-only option:
+  - `--engine`
+  - `--engine=value`
+  - `--data`
+  - `--data=value`
+  - `--output`
+  - `--output=value`
+- Unadorned literal `claimscope benchmark` remains a legacy research-direction query.
+
+### TDD Evidence
+
+- Added focused CLI regression tests for:
+  - output-only separated form: `benchmark --output path`
+  - output-only equals form: `benchmark --output=path`
+  - explicit engine/data separated routes
+  - explicit engine/data equals routes
+- RED command: `python -m pytest tests/test_benchmark.py -q`
+  - `4 failed, 13 passed`
+  - Failures showed output-only forms fell through to analysis mode and equals-style engine/data options were not recognized as benchmark dispatch.
+- GREEN command: `python -m pytest tests/test_benchmark.py -q`
+  - `17 passed in 2.66s`
+
+### Verification
+
+- `python -m pytest tests/test_benchmark.py -q`
+  - `17 passed in 2.66s`
+- Output-only CLI smoke with report written under `%TEMP%`:
+  - `python -m claimscope.cli benchmark --output <temp path>`
+  - `ClaimBench: 27 cases, aggregate score 70.09 (HeuristicCoreClaimEngine)`
+  - JSON check: `case_count=27 aggregate=70.09`
+- Literal legacy CLI smoke:
+  - `python -m claimscope.cli benchmark`
+  - Produced a normal ClaimScope markdown report for input direction `benchmark`.
+- `python -m pytest -q`
+  - `66 passed in 3.50s`
+
+### Self-Review
+
+- Dispatch stays conservative: only `benchmark` followed by a known benchmark-only option selects the benchmark command.
+- Output-only benchmark mode uses the default heuristic engine and default JSONL data, so it remains keyless and offline.

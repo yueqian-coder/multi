@@ -237,6 +237,46 @@ def test_benchmark_cli_writes_json_report(tmp_path):
     assert payload["summary"]["aggregate_score"] > 0
 
 
+@pytest.mark.parametrize(
+    "option_builder",
+    [
+        lambda output_path: ["--output", str(output_path)],
+        lambda output_path: [f"--output={output_path}"],
+        lambda output_path: ["--engine", "heuristic", "--output", str(output_path)],
+        lambda output_path: [
+            "--data",
+            str(DATA_PATH),
+            "--output",
+            str(output_path),
+        ],
+    ],
+)
+def test_any_explicit_benchmark_only_option_selects_benchmark_command(
+    tmp_path, option_builder
+):
+    output_path = tmp_path / "output-only-claimbench.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "claimscope.cli",
+            "benchmark",
+            *option_builder(output_path),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ClaimBench" in completed.stdout
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["summary"]["case_count"] >= 24
+    assert "case_results" in payload
+
+
 def test_literal_benchmark_is_preserved_as_legacy_research_direction():
     completed = subprocess.run(
         [sys.executable, "-m", "claimscope.cli", "benchmark"],
@@ -263,6 +303,28 @@ def test_explicit_benchmark_options_still_select_benchmark_command():
             "--data",
             str(DATA_PATH),
         ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ClaimBench" in completed.stdout
+
+
+@pytest.mark.parametrize(
+    "benchmark_args",
+    [
+        ["--engine=heuristic"],
+        [f"--data={DATA_PATH}"],
+    ],
+)
+def test_explicit_equals_style_engine_and_data_options_select_benchmark_command(
+    benchmark_args,
+):
+    completed = subprocess.run(
+        [sys.executable, "-m", "claimscope.cli", "benchmark", *benchmark_args],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,

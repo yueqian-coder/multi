@@ -64,7 +64,12 @@ def main() -> None:
 
 
 def _has_explicit_benchmark_option(argv: list[str]) -> bool:
-    return any(arg in {"--engine", "--data"} for arg in argv)
+    benchmark_options = {"--engine", "--data", "--output"}
+    return any(
+        arg in benchmark_options
+        or any(arg.startswith(f"{option}=") for option in benchmark_options)
+        for arg in argv
+    )
 
 
 def _run_analysis_cli(argv: list[str]) -> None:
