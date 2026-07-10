@@ -79,17 +79,18 @@ def render_candidate(candidate: dict, selected: bool, index: int) -> str:
     score = float(candidate.get("confidence", 0))
     selected_text = "Selected" if selected else "Candidate"
     conditions = ", ".join(candidate.get("conditions", [])) or "No conditions stated"
-    return f"""
-    <article class="candidate {'candidate-selected' if selected else ''}">
-      <div class="candidate-top"><span class="radio">{'●' if selected else '○'}</span>
-        <strong>{selected_text} {index}</strong><span class="muted">Proposed by {escape(str(candidate.get('proposer', 'unknown')).replace('_', ' '))}</span>
-        <b class="candidate-score">{score:.2f}</b></div>
-      <div class="candidate-claim">{escape(str(candidate.get('claim', '')))}</div>
-      <div class="candidate-meta"><b>Mechanism:</b> {escape(str(candidate.get('method_or_mechanism', 'Not specified')))}<br>
-      <b>Outcome:</b> {escape(str(candidate.get('expected_effect', 'Not specified')))}<br>
-      <b>Conditions:</b> {escape(conditions)}</div>
-    </article>
-    """
+    radio_class = "radio radio-selected" if selected else "radio"
+    return (
+        f'<article class="candidate {"candidate-selected" if selected else ""}">'
+        f'<div class="candidate-top"><span class="{radio_class}" aria-hidden="true"></span>'
+        f'<strong>{selected_text} {index}</strong>'
+        f'<span class="muted">Proposed by {escape(str(candidate.get("proposer", "unknown")).replace("_", " "))}</span>'
+        f'<b class="candidate-score">{score:.2f}</b></div>'
+        f'<div class="candidate-claim">{escape(str(candidate.get("claim", "")))}</div>'
+        f'<div class="candidate-meta"><b>Mechanism:</b> {escape(str(candidate.get("method_or_mechanism", "Not specified")))}<br>'
+        f'<b>Outcome:</b> {escape(str(candidate.get("expected_effect", "Not specified")))}<br>'
+        f'<b>Conditions:</b> {escape(conditions)}</div></article>'
+    )
 
 
 def render_activity(result: dict) -> str:
@@ -97,12 +98,14 @@ def render_activity(result: dict) -> str:
     if not rows:
         rows = [{"role": label, "status": "pending", "summary": "Waiting for arena run.", "duration": "-", "artifacts": 0} for label in ["Operationalizer", "Mechanism analyst", "Skeptical empiricist", "Falsifiability critic", "Scope critic", "Judge"]]
     items = []
-    for index, row in enumerate(rows[:6], 1):
-        items.append(f"""
-        <div class="activity-row"><span class="agent-number">{index}</span><div><strong>{escape(str(row['role']))}</strong>
-        <span class="status status-{escape(str(row['status']))}">{escape(str(row['status']).title())}</span>
-        <p>{escape(str(row['summary']))}</p></div><span class="muted">{escape(str(row['duration']))} / {row['artifacts']} artifacts</span></div>
-        """)
+    for index, row in enumerate(rows, 1):
+        items.append(
+            f'<div class="activity-row"><span class="agent-number">{index}</span><div>'
+            f'<strong>{escape(str(row["role"]))}</strong>'
+            f'<span class="status status-{escape(str(row["status"]))}">{escape(str(row["status"]).title())}</span>'
+            f'<p>{escape(str(row["summary"]))}</p></div>'
+            f'<span class="muted">{escape(str(row["duration"]))} / {row["artifacts"]} artifacts</span></div>'
+        )
     return "".join(items)
 
 
