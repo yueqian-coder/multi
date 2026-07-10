@@ -279,6 +279,22 @@ def test_heuristic_core_claim_reports_missing_slots_and_trace():
     assert result.mode == "heuristic"
 
 
+def test_heuristic_claim_score_penalizes_missing_metric_comparator_and_boundary():
+    HeuristicCoreClaimEngine = _load_core_claim_engine()
+    result = HeuristicCoreClaimEngine().run(
+        "RAG can reliably reduce hallucination in LLM-generated answers"
+    )
+
+    candidate = result.selected_candidate
+    assert candidate is not None
+    assert {
+        "comparison baseline",
+        "evaluation metric",
+        "boundary conditions",
+    }.issubset(set(candidate.missing_information))
+    assert candidate.confidence < 0.75
+
+
 def test_core_claim_result_serializes_without_private_reasoning():
     HeuristicCoreClaimEngine = _load_core_claim_engine()
     result = HeuristicCoreClaimEngine().run("use an error map loop for segmentation")
@@ -359,6 +375,21 @@ def test_llm_planner_core_claim_result_uses_multi_agent_arena():
         "mechanism_analyst",
         "skeptical_empiricist",
     }
+
+
+def test_llm_planner_marks_total_arena_recovery_as_degraded():
+    _, LLMClaimPlanner = _load_planners()
+
+    class AlwaysFailingLLM:
+        def chat(self, messages, temperature=0.2, timeout=None):
+            raise RuntimeError("provider unavailable")
+
+    planner = LLMClaimPlanner(llm_client=AlwaysFailingLLM())
+    result = planner.extract_core_claim_result("Can retrieval make medical QA safer?")
+
+    assert result.degraded is True
+    assert planner.fallback_reason
+    assert any(event.status == "degraded" for event in result.events)
 
 
 def test_arena_runs_three_proposers_two_critics_and_judge():

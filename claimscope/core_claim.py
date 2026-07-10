@@ -332,6 +332,21 @@ def _build_candidate(claim: str) -> ClaimCandidate:
         missing_information.append("target task or object")
     if not expected_effect:
         missing_information.append("measurable expected effect")
+    if not re.search(
+        r"\b(versus|vs\.?|compared (?:with|to)|baseline|control|without|against|than)\b",
+        claim,
+        re.IGNORECASE,
+    ):
+        missing_information.append("comparison baseline")
+    if not re.search(
+        r"\b(accuracy|auc|f1|precision|recall|rate|score|error|latency|throughput|"
+        r"mortality|yield|cost|time|percent|metric|change)\b|%",
+        claim,
+        re.IGNORECASE,
+    ):
+        missing_information.append("evaluation metric")
+    if not conditions:
+        missing_information.append("boundary conditions")
     confidence = max(0.0, min(1.0, _candidate_confidence(missing_information)))
     return ClaimCandidate(
         claim=claim,
@@ -346,8 +361,9 @@ def _build_candidate(claim: str) -> ClaimCandidate:
 
 
 def _candidate_confidence(missing_information: list[str]) -> float:
-    covered_slots = 3 - len(missing_information)
-    return round(max(0, covered_slots) / 3, 2)
+    total_slots = 6
+    covered_slots = total_slots - len(missing_information)
+    return round(max(0, covered_slots) / total_slots, 2)
 
 
 def _extract_method_or_mechanism(claim: str) -> str:

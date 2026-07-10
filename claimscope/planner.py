@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from .core_claim import (
@@ -10,7 +10,7 @@ from .core_claim import (
     PROPOSER_ROLES,
     with_selected_claim,
 )
-from .models import CoreClaimResult
+from .models import AgentEvent, CoreClaimResult
 from .text_utils import keywords
 
 
@@ -141,6 +141,7 @@ class LLMClaimPlanner:
     fallback_reason: str = field(default="", init=False)
 
     def extract_core_claim_result(self, query: str) -> CoreClaimResult:
+        arena_failure_reason = ""
         try:
             arena_result = CoreClaimArena(self.llm_client).run(query)
             if any(
@@ -154,8 +155,13 @@ class LLMClaimPlanner:
                     else ""
                 )
                 return arena_result
+            arena_failure_reason = (
+                "Multi-agent arena produced no valid agent candidates; used fallback extraction."
+            )
         except Exception:
-            pass
+            arena_failure_reason = (
+                "Multi-agent arena failed; used deterministic fallback extraction."
+            )
 
         fallback_result = self._fallback_core_claim_result(query)
         claim = self._extract_core_claim(
@@ -163,8 +169,27 @@ class LLMClaimPlanner:
             fallback_claim=fallback_result.selected_claim,
         )
         if claim == fallback_result.selected_claim:
-            return fallback_result
-        return with_selected_claim(fallback_result, claim, mode=self.used_planner)
+            result = fallback_result
+        else:
+            result = with_selected_claim(fallback_result, claim, mode=self.used_planner)
+        fallback_detail = self.fallback_reason
+        self.fallback_reason = " ".join(
+            item for item in [arena_failure_reason, fallback_detail] if item
+        )
+        return replace(
+            result,
+            degraded=True,
+            events=[
+                *result.events,
+                AgentEvent(
+                    stage="core_claim_arena",
+                    role="llm_claim_planner",
+                    status="degraded",
+                    public_summary=arena_failure_reason,
+                    artifacts={"fallback_mode": self.used_planner},
+                ),
+            ],
+        )
 
     def extract_core_claim(self, query: str) -> str:
         return self.extract_core_claim_result(query).selected_claim

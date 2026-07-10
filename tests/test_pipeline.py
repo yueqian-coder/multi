@@ -254,6 +254,47 @@ def test_paper_and_evidence_expose_auditable_provenance_defaults():
         for assumption in report.assumptions
         for evidence in assumption.evidence
     )
+    assert all(
+        evidence.paper_source
+        and evidence.matched_query
+        and evidence.source_span_start >= 0
+        and evidence.is_fixture
+        for assumption in report.assumptions
+        for evidence in assumption.evidence
+    )
+    assert any(
+        "heuristic abstract matches" in warning.lower()
+        for warning in report.warnings
+    )
+    assert all(
+        item.paper_source and item.source_span_start >= 0 and item.is_fixture
+        for item in report.negative_evidence
+    )
+
+
+def test_limitation_signal_is_not_treated_as_direct_disproof():
+    from claimscope.pipeline import _build_assumptions
+    from claimscope.planner import PlannedAssumption
+
+    plan = PlannedAssumption(
+        text="Retrieval quality generalizes under domain shift.",
+        support_query="retrieval quality domain shift",
+        contradict_query="retrieval quality domain shift",
+        limitation_query="retrieval quality domain shift",
+        null_result_query="retrieval quality domain shift",
+    )
+    paper = Paper(
+        title="Retrieval Quality Boundaries",
+        year=2025,
+        authors=["A. Researcher"],
+        source="fixture",
+        abstract="A limitation appears under domain shift for retrieval quality.",
+    )
+
+    assumption = _build_assumptions([plan], [paper])[0]
+
+    assert assumption.status == "mixed"
+    assert all(item.stance == "limit" for item in assumption.evidence)
 
 
 def test_targeted_search_deduplicates_by_external_id_before_title():

@@ -13,11 +13,85 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install -e ".[web,mcp,dev]" build
       - run: python -m pytest -q
       - run: python -m compileall claimscope app.py
-      - run: python -m claimscope.cli benchmark --engine heuristic --data benchmarks/claimbench.jsonl
-      - name: Scan for key-like secrets
+      - run: python -m claimscope.cli benchmark --engine heuristic
+      - run: python -m build --wheel
+      - name: Smoke installed wheel and documented commands
         shell: bash
         run: |
-          ! grep -RInE --exclude-dir=.git --exclude-dir=.venv --exclude='*.pyc' 'sk-[A-Za-z0-9_-]{20,}|(api[_-]?key|secret|token)[[:space:]]*[:=][[:space:]]*["'"']?[A-Za-z0-9_/-]{20,}' .
+          WHEEL=$(find dist -name 'claimscope-*.whl' -print -quit)
+          SMOKE="$RUNNER_TEMP/claimscope-smoke"
+          python -m venv "$SMOKE"
+          "$SMOKE/bin/python" -m pip install "$WHEEL[web,mcp]"
+          (cd "$RUNNER_TEMP" && "$SMOKE/bin/claimscope" benchmark --engine heuristic)
+          "$SMOKE/bin/claimscope-mcp" --help
+          "$SMOKE/bin/python" - <<'PY'
+          import asyncio
+          import os
+          import sys
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+
+          async def main():
+              params = StdioServerParameters(
+                  command=sys.executable,
+                  args=["-m", "claimscope.mcp_server"],
+                  cwd=os.environ["RUNNER_TEMP"],
+              )
+              async with stdio_client(params) as (read, write):
+                  async with ClientSession(read, write) as session:
+                      await session.initialize()
+                      tools = await session.list_tools()
+                      assert sorted(tool.name for tool in tools.tools) == [
+                          "analyze_research_direction",
+                          "build_evidence_queries",
+                          "evaluate_claim_benchmark",
+                          "extract_core_claim",
+                          "get_demo_report",
+                      ]
+
+          asyncio.run(main())
+          PY
+          "$SMOKE/bin/python" -m streamlit run app.py --server.headless true --server.port 8507 >"$RUNNER_TEMP/claimscope-streamlit.log" 2>&1 &
+          SERVER_PID=$!
+          for attempt in {1..20}; do
+            if curl --fail --silent http://localhost:8507/_stcore/health; then break; fi
+            sleep 1
+          done
+          curl --fail http://localhost:8507/_stcore/health
+          kill "$SERVER_PID"
+      - name: Scan for key-like secrets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          excluded = {".git", ".venv", "__pycache__", "outputs"}
+          high_confidence_patterns = [
+              re.compile(r"sk-[A-Za-z0-9_-]{32,}"),
+              re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}"),
+              re.compile(r"github_pat_[A-Za-z0-9_]{50,}"),
+              re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
+              re.compile(r"AKIA[0-9A-Z]{16}"),
+              re.compile(r"Bearer\s+[A-Za-z0-9._-]{24,}", re.IGNORECASE),
+          ]
+          assignment_pattern = re.compile(
+              r"(?i)(?:api[_-]?key|secret|token)\s*[:=]\s*[\"']?([A-Za-z0-9_/-]{24,})"
+          )
+          findings = []
+          for path in Path(".").rglob("*"):
+              if not path.is_file() or any(part in excluded for part in path.parts):
+                  continue
+              text = path.read_text(encoding="utf-8", errors="ignore")
+              if any(pattern.search(text) for pattern in high_confidence_patterns):
+                  findings.append(str(path))
+                  continue
+              for match in assignment_pattern.finditer(text):
+                  if not match.group(1).lower().startswith(("replace", "optional", "test")):
+                      findings.append(str(path))
+                      break
+          if findings:
+              raise SystemExit("Potential secret in: " + ", ".join(sorted(set(findings))))
+          PY

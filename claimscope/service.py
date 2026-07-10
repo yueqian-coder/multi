@@ -185,4 +185,4 @@ def _jsonable(value: Any) -> Any:
 
 
 def _default_benchmark_path() -> Path:
-    return Path(__file__).resolve().parents[1] / "benchmarks" / "claimbench.jsonl"
+    return Path(__file__).with_name("data") / "claimbench.jsonl"

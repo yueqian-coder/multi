@@ -21,7 +21,8 @@ def test_ui_contract_has_compact_modes_and_secret_safe_provider_copy():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "Full Discovery" in source
     assert "Download feedback JSONL" in source
-    assert "st.session_state[\"provider_key\"]" in source
+    assert 'st.session_state.get("provider_key"' in source
+    assert 'st.session_state.get("provider_allow_remote")' in source
     assert "st.sidebar" not in source
     assert "linear-gradient" not in source
 
@@ -117,3 +118,43 @@ def test_candidate_markup_uses_css_radio_without_broken_glyphs():
     assert "\n" not in markup
     assert 'class="radio radio-selected"' in markup
     assert markup.isascii()
+
+
+def test_fixture_evidence_and_export_are_unambiguously_labeled():
+    from claimscope.ui_components import render_discovery_evidence, report_markdown
+
+    report = {
+        "query": "test",
+        "claim": "test claim",
+        "papers": [
+            {
+                "title": "Synthetic Study",
+                "year": 2025,
+                "source": "demo",
+                "authors": ["Example"],
+                "abstract": "Synthetic abstract.",
+                "is_fixture": True,
+            }
+        ],
+        "assumptions": [{"text": "A", "status": "mixed", "risk": "high"}],
+        "workflow_steps": [],
+        "idea_opportunities": [],
+    }
+
+    evidence_markup = render_discovery_evidence(report).lower()
+    markdown = report_markdown(report).lower()
+
+    assert "synthetic fixture" in evidence_markup
+    assert "not research evidence" in evidence_markup
+    assert "synthetic fixture" in markdown
+    assert "heuristic abstract signal" in markdown
+
+
+def test_ui_names_candidate_score_honestly_and_requires_network_consent():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    assert "Candidate score" in source
+    assert "Structural completeness" in source
+    assert "Allow research directions to be sent" in source
+    assert "Allow generated queries to be sent" in source
+    assert "Open claim slots" in source

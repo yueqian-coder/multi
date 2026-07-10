@@ -391,15 +391,19 @@ def _build_assumptions(
     for item in plan:
         evidence = _collect_evidence(item.retrieval_queries, papers, max_items=5)
         support = sum(1 for item in evidence if item.stance == "support")
-        negative = sum(1 for item in evidence if item.stance in {"limit", "contradict"})
-        if support and negative:
+        contradict = sum(1 for item in evidence if item.stance == "contradict")
+        limitations = sum(1 for item in evidence if item.stance == "limit")
+        if support and (contradict or limitations):
             status = "mixed"
             risk = "high"
         elif support:
             status = "supported"
             risk = "medium"
-        elif negative:
+        elif contradict:
             status = "unsupported"
+            risk = "high"
+        elif limitations:
+            status = "mixed"
             risk = "high"
         else:
             status = "unknown"
@@ -423,6 +427,11 @@ def _collect_evidence(
     evidence_queries: str | list[str], papers: list[Paper], max_items: int = 4
 ) -> list[EvidenceItem]:
     queries = [evidence_queries] if isinstance(evidence_queries, str) else evidence_queries
+    query_kinds = (
+        ["support", "contradict", "limitation", "null_result"]
+        if len(queries) == 4
+        else ["general"] * len(queries)
+    )
     claim_terms = set()
     for query in queries:
         claim_terms.update(keywords(query, 12))
@@ -430,7 +439,11 @@ def _collect_evidence(
     for paper in papers:
         for sentence in split_sentences(paper.abstract):
             combined_text = f"{paper.title} {sentence}"
-            score = max(overlap_score(query, combined_text) for query in queries)
+            query_matches = [
+                (overlap_score(query, combined_text), query, query_kind)
+                for query, query_kind in zip(queries, query_kinds)
+            ]
+            score, matched_query, query_kind = max(query_matches, key=lambda item: item[0])
             sentence_terms = set(keywords(combined_text, 20))
             shared_terms = claim_terms & sentence_terms
             stance = _sentence_stance(sentence)
@@ -449,6 +462,13 @@ def _collect_evidence(
                     snippet=truncate(sentence),
                     stance=stance,
                     score=score,
+                    paper_source=paper.source,
+                    paper_url=paper.url,
+                    paper_external_id=paper.external_id,
+                    is_fixture=paper.is_fixture,
+                    matched_query=matched_query,
+                    query_kind=query_kind,
+                    source_span_start=max(0, paper.abstract.find(sentence)),
                 )
             )
     candidates.sort(key=lambda item: (item.score, item.stance == "support"), reverse=True)
@@ -473,6 +493,11 @@ def _mine_negative_evidence(papers: list[Paper]) -> list[NegativeEvidence]:
                             "Treat this as a candidate boundary condition or "
                             "null-result replication slot."
                         ),
+                        paper_source=paper.source,
+                        paper_url=paper.url,
+                        paper_external_id=paper.external_id,
+                        is_fixture=paper.is_fixture,
+                        source_span_start=max(0, paper.abstract.find(sentence)),
                     )
                 )
                 continue
@@ -492,6 +517,11 @@ def _mine_negative_evidence(papers: list[Paper]) -> list[NegativeEvidence]:
                     paper_title=paper.title,
                     year=paper.year,
                     implication=implication,
+                    paper_source=paper.source,
+                    paper_url=paper.url,
+                    paper_external_id=paper.external_id,
+                    is_fixture=paper.is_fixture,
+                    source_span_start=max(0, paper.abstract.find(sentence)),
                 )
             )
     return findings[:8]
@@ -671,6 +701,9 @@ def _quality_warnings(
     if papers:
         warnings.append(
             "Quality review: abstract-only evidence; inspect full papers before relying on the report."
+        )
+        warnings.append(
+            "Quality review: evidence statuses are heuristic abstract matches, not scientific adjudication."
         )
     if planner_recovered or _planner_used_heuristic_fallback(planner):
         warnings.append(

@@ -264,6 +264,22 @@ def test_benchmark_cli_default_dataset_works_outside_repository(tmp_path):
     ] == 27
 
 
+def test_service_uses_packaged_claimbench_dataset():
+    from claimscope.service import ClaimScopeService
+
+    service = ClaimScopeService()
+
+    assert service.benchmark_path.parent.name == "data"
+    assert service.benchmark_path.is_file()
+    assert service.evaluate_claim_benchmark()["summary"]["case_count"] == 27
+
+
+def test_repository_and_packaged_claimbench_copies_stay_identical():
+    packaged = REPO_ROOT / "claimscope" / "data" / "claimbench.jsonl"
+
+    assert packaged.read_bytes() == DATA_PATH.read_bytes()
+
+
 @pytest.mark.parametrize(
     "option_builder",
     [

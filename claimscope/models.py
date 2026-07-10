@@ -41,6 +41,13 @@ class EvidenceItem:
     stance: str
     score: float = 0.0
     method: str = "abstract_heuristic"
+    paper_source: str = ""
+    paper_url: str = ""
+    paper_external_id: str = ""
+    is_fixture: bool = False
+    matched_query: str = ""
+    query_kind: str = "general"
+    source_span_start: int = -1
 
 
 @dataclass(frozen=True)
@@ -69,6 +76,11 @@ class NegativeEvidence:
     paper_title: str
     year: int | None
     implication: str
+    paper_source: str = ""
+    paper_url: str = ""
+    paper_external_id: str = ""
+    is_fixture: bool = False
+    source_span_start: int = -1
 
 
 @dataclass(frozen=True)
@@ -301,6 +313,9 @@ class AnalysisReport:
                 lines.append(f"- {warning}")
 
         lines.extend(["", "## Assumption Evidence Matrix"])
+        lines.append(
+            "Statuses in this section are heuristic abstract-match signals, not scientific adjudication."
+        )
         if self.assumptions:
             lines.append(
                 "| Assumption | Status | Support | Contradict | Limitation | Null Result | Opportunity Signal |"
@@ -333,7 +348,7 @@ class AnalysisReport:
         lines.extend(["", "## Assumption Gaps"])
         for assumption in self.assumptions:
             lines.append(
-                f"- **{assumption.text}** - status: `{assumption.status}`, risk: `{assumption.risk}`"
+                f"- **{assumption.text}** - heuristic signal: `{assumption.status}`, risk: `{assumption.risk}`"
             )
             if any(
                 [
@@ -354,19 +369,34 @@ class AnalysisReport:
                     lines.append(f"    - Null result: `{assumption.null_result_query}`")
             if assumption.evidence:
                 for evidence in assumption.evidence:
+                    fixture_label = " [synthetic fixture]" if evidence.is_fixture else ""
+                    source_ref = evidence.paper_external_id or evidence.paper_url or evidence.paper_source
                     lines.append(
-                        f"  - [{evidence.stance}] {evidence.paper_title} ({evidence.year}): {evidence.snippet}"
+                        f"  - [heuristic {evidence.stance} signal] {evidence.paper_title} "
+                        f"({evidence.year}){fixture_label}: {evidence.snippet}"
                     )
+                    if source_ref:
+                        lines.append(
+                            f"    - Provenance: {source_ref}; abstract offset "
+                            f"{evidence.source_span_start}; query kind `{evidence.query_kind}`"
+                        )
             else:
                 lines.append("  - No direct evidence found in the retrieved set.")
 
         lines.extend(["", "## Negative Evidence"])
         if self.negative_evidence:
             for item in self.negative_evidence:
+                fixture_label = " [synthetic fixture]" if item.is_fixture else ""
+                source_ref = item.paper_external_id or item.paper_url or item.paper_source
                 lines.append(
-                    f"- **{item.kind}** from {item.paper_title} ({item.year}): {item.text}"
+                    f"- **{item.kind}** from {item.paper_title} ({item.year})"
+                    f"{fixture_label}: {item.text}"
                 )
                 lines.append(f"  - Implication: {item.implication}")
+                if source_ref:
+                    lines.append(
+                        f"  - Provenance: {source_ref}; abstract offset {item.source_span_start}"
+                    )
         else:
             lines.append("No explicit negative evidence was found.")
 

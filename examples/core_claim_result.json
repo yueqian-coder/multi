@@ -1,19 +1,60 @@
 {
+  "candidates": [
+    {
+      "claim": "RAG can reliably reduce hallucination in LLM-generated answers",
+      "conditions": [],
+      "confidence": 0.5,
+      "expected_effect": "reduce hallucination in LLM-generated answers",
+      "falsification_test": "Compare the stated outcome against a baseline under the stated condition.",
+      "method_or_mechanism": "RAG can reliably reduce hallucination",
+      "missing_information": [
+        "comparison baseline",
+        "evaluation metric",
+        "boundary conditions"
+      ],
+      "proposer": "heuristic",
+      "target_or_task": "LLM-generated answers"
+    }
+  ],
+  "critiques": [],
+  "degraded": false,
   "direction": "RAG can reliably reduce hallucination in LLM-generated answers",
-  "selected_claim": "RAG can reliably reduce hallucination in LLM-generated answers",
+  "events": [
+    {
+      "artifacts": {
+        "candidate_count": 1,
+        "selected_claim": "RAG can reliably reduce hallucination in LLM-generated answers"
+      },
+      "duration_ms": 1,
+      "public_summary": "Built a deterministic baseline claim candidate without private reasoning.",
+      "role": "heuristic_core_claim_engine",
+      "scores": {
+        "selected_candidate": 85.0
+      },
+      "stage": "core_claim",
+      "status": "complete"
+    }
+  ],
+  "mode": "heuristic",
   "selected_candidate": {
     "claim": "RAG can reliably reduce hallucination in LLM-generated answers",
-    "method_or_mechanism": "RAG can reliably reduce hallucination",
-    "target_or_task": "LLM-generated answers",
-    "expected_effect": "reduce hallucination in LLM-generated answers",
     "conditions": [],
+    "confidence": 0.5,
+    "expected_effect": "reduce hallucination in LLM-generated answers",
     "falsification_test": "Compare the stated outcome against a baseline under the stated condition.",
-    "missing_information": [],
-    "confidence": 1.0,
-    "proposer": "heuristic"
+    "method_or_mechanism": "RAG can reliably reduce hallucination",
+    "missing_information": [
+      "comparison baseline",
+      "evaluation metric",
+      "boundary conditions"
+    ],
+    "proposer": "heuristic",
+    "target_or_task": "LLM-generated answers"
   },
-  "events": [{"stage": "core_claim", "role": "heuristic_core_claim_engine", "status": "complete", "public_summary": "Built a deterministic baseline claim candidate without private reasoning.", "duration_ms": 1, "artifacts": {"candidate_count": 1}, "scores": {"selected_candidate": 100.0}}],
-  "mode": "heuristic",
-  "degraded": false,
-  "fixture_note": "The companion report uses synthetic fixture papers."
+  "selected_claim": "RAG can reliably reduce hallucination in LLM-generated answers",
+  "unresolved_ambiguities": [
+    "comparison baseline",
+    "evaluation metric",
+    "boundary conditions"
+  ]
 }

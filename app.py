@@ -47,13 +47,13 @@ def inject_style() -> None:
     .critique-row { display:grid; grid-template-columns:160px 1fr 45px; gap:10px; border-top:1px solid var(--line); padding:10px 0; font-size:13px; }.critique-row b { color:var(--amber); }
     .evidence-item { border-top:1px solid var(--line); padding:11px 0; }.evidence-item p { font-size:13px; line-height:1.45; margin:5px 0; }.warning { color:var(--amber); }
     .section-label { font-size:16px; font-weight:800; margin:12px 0 7px; }.warning-box { border-left:3px solid var(--amber); padding:8px 10px; background:#fffaf0; color:#815600; font-size:13px; margin:8px 0; }
-    @media (max-width: 760px) { .block-container { padding:4rem 0.65rem 2rem; }.brand { font-size:22px; }.provider-status { justify-content:flex-start; }.claim-grid { display:block; }.metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.metric:nth-child(2) { border:0; }.activity-row { grid-template-columns:28px 1fr; }.activity-row > .muted { grid-column:2; }.critique-row { grid-template-columns:1fr auto; }.critique-row span { grid-column:1 / -1; order:3; }.selected-claim { font-size:18px; } }
+    @media (max-width: 760px) { .block-container { padding:4rem 0.65rem 2rem; }.brand { font-size:22px; }.provider-status { justify-content:flex-start; white-space:normal; }.claim-grid { display:block; }.metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.metric:nth-child(2) { border:0; }.activity-row { grid-template-columns:28px 1fr; }.activity-row > .muted { grid-column:2; }.critique-row { grid-template-columns:1fr auto; }.critique-row span { grid-column:1 / -1; order:3; }.selected-claim { font-size:18px; } }
     </style>
     """, unsafe_allow_html=True)
 
 
 def session_defaults() -> None:
-    defaults = {"core_claim_result": None, "discovery_result": None, "direction": DEFAULT_DIRECTION, "provider_key": "", "provider_base": os.getenv("OPENAI_BASE_URL", ""), "provider_model": os.getenv("MODEL_NAME", "gpt-4o-mini")}
+    defaults = {"core_claim_result": None, "discovery_result": None, "direction": DEFAULT_DIRECTION, "provider_key": "", "provider_base": os.getenv("OPENAI_BASE_URL", ""), "provider_model": os.getenv("MODEL_NAME", "gpt-4o-mini"), "provider_allow_remote": False}
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
 
@@ -62,12 +62,14 @@ def build_service() -> ClaimScopeService:
     key = st.session_state.get("provider_key", "").strip()
     base = st.session_state.get("provider_base", "").strip()
     model = st.session_state.get("provider_model", "").strip() or "gpt-4o-mini"
-    client = OpenAICompatibleClient(api_key=st.session_state["provider_key"], base_url=base, model=model) if key and base else OpenAICompatibleClient.from_env()
+    allow_remote = bool(st.session_state.get("provider_allow_remote"))
+    client = OpenAICompatibleClient(api_key=key, base_url=base, model=model) if key and base and allow_remote else OpenAICompatibleClient.from_env() if not key else None
     return ClaimScopeService(llm_client=client)
 
 
 def render_header() -> str:
-    health = "configured" if st.session_state.get("provider_key") and st.session_state.get("provider_base") else "demo / heuristic"
+    has_provider = bool(st.session_state.get("provider_key") and st.session_state.get("provider_base"))
+    health = "configured" if has_provider and st.session_state.get("provider_allow_remote") else "local only" if has_provider else "demo / heuristic"
     with st.container(border=True):
         brand_column, mode_column, provider_column = st.columns([0.8, 1.35, 1.15], vertical_alignment="center")
         with brand_column:
@@ -86,12 +88,18 @@ def render_header() -> str:
                     st.text_input("API key", type="password", key="provider_key", help="Session-only; never exported or logged.")
                     st.text_input("Base URL", key="provider_base")
                     st.text_input("Model", key="provider_model")
+                    st.checkbox(
+                        "Allow research directions to be sent to this provider",
+                        key="provider_allow_remote",
+                    )
                     st.caption(f"Host: {provider_host(st.session_state.get('provider_base', ''))}")
+                    st.caption("LLM mode sends the research direction to the configured provider.")
     return mode or "Core Claim Arena"
 
 
 def render_research_controls(mode: str) -> tuple[str, bool, int, bool]:
     online = False
+    online_consent = True
     limit = 12
     with st.container(border=True):
         st.markdown('<div class="panel-title">Research direction</div><p class="muted">Describe the fuzzy direction you want to stress-test.</p>', unsafe_allow_html=True)
@@ -101,8 +109,13 @@ def render_research_controls(mode: str) -> tuple[str, bool, int, bool]:
             st.caption("Retrieval controls are disabled in Core Claim mode.")
         else:
             online = st.toggle("Use online academic retrieval", value=False)
+            if online:
+                st.warning("Online retrieval sends generated search queries to public academic APIs.")
+                online_consent = st.checkbox(
+                    "Allow generated queries to be sent to arXiv and Semantic Scholar"
+                )
             limit = st.slider("Maximum papers", 5, 30, 12)
-        run = st.button("Run Arena" if mode == "Core Claim Arena" else "Run Discovery", type="primary", use_container_width=True)
+        run = st.button("Run Arena" if mode == "Core Claim Arena" else "Run Discovery", type="primary", use_container_width=True, disabled=online and not online_consent)
     return direction, online, limit, run
 
 
@@ -112,7 +125,13 @@ def render_core_claim(result: dict | None) -> None:
         return
     selected = result.get("selected_candidate") or {}
     confidence = float(selected.get("confidence", 0))
-    st.markdown(f"""<section class="panel"><div class="panel-title">Selected Core Claim</div><div class="selected-claim">{escape(str(result.get('selected_claim', '')))}</div><div class="metrics">{''.join([f'<div class="metric"><span class="metric-label">Confidence</span><strong>{confidence:.2f}</strong><small>{confidence_label(confidence)}</small></div>', f'<div class="metric"><span class="metric-label">Mode</span><strong>{escape(str(result.get("mode", "heuristic")))}</strong></div>', f'<div class="metric"><span class="metric-label">Falsification test</span><strong>{escape(str(selected.get("falsification_test", "Not specified")))}</strong></div>', f'<div class="metric"><span class="metric-label">Missing information</span><strong>{len(result.get("unresolved_ambiguities", []))}</strong></div>'])}</div></section>""", unsafe_allow_html=True)
+    st.markdown(f"""<section class="panel"><div class="panel-title">Selected Core Claim</div><div class="selected-claim">{escape(str(result.get('selected_claim', '')))}</div><div class="metrics">{''.join([f'<div class="metric"><span class="metric-label">Candidate score</span><strong>{confidence:.2f}</strong><small>Structural completeness: {confidence_label(confidence)}</small></div>', f'<div class="metric"><span class="metric-label">Mode</span><strong>{escape(str(result.get("mode", "heuristic")))}</strong></div>', f'<div class="metric"><span class="metric-label">Falsification test</span><strong>{escape(str(selected.get("falsification_test", "Not specified")))}</strong></div>', f'<div class="metric"><span class="metric-label">Missing information</span><strong>{len(result.get("unresolved_ambiguities", []))}</strong></div>'])}</div></section>""", unsafe_allow_html=True)
+    open_slots = [escape(str(item)) for item in result.get("unresolved_ambiguities", [])]
+    if open_slots:
+        st.markdown(
+            f'<div class="warning-box"><strong>Open claim slots:</strong> {"; ".join(open_slots)}</div>',
+            unsafe_allow_html=True,
+        )
     if result.get("degraded"):
         st.markdown('<div class="warning-box">This run used a deterministic fallback for one or more agent stages.</div>', unsafe_allow_html=True)
     st.markdown('<section class="panel"><div class="panel-title">Agent activity</div>' + render_activity(result) + '</section>', unsafe_allow_html=True)
@@ -133,7 +152,7 @@ def render_discovery(report: dict | None) -> None:
         for warning in report.get("warnings", []): st.markdown(f'<div class="warning-box">{escape(str(warning))}</div>', unsafe_allow_html=True)
     with ledger:
         for assumption in report.get("assumptions", []):
-            st.markdown(f'<article class="artifact"><strong>{escape(str(assumption.get("text", "")))}</strong><span class="status">{escape(str(assumption.get("status", "unknown")))}</span><p class="muted">Risk: {escape(str(assumption.get("risk", "medium")))}</p></article>', unsafe_allow_html=True)
+            st.markdown(f'<article class="artifact"><strong>{escape(str(assumption.get("text", "")))}</strong><span class="status">Heuristic signal: {escape(str(assumption.get("status", "unknown")))}</span><p class="muted">Risk: {escape(str(assumption.get("risk", "medium")))}</p></article>', unsafe_allow_html=True)
     with evidence:
         st.markdown(render_discovery_evidence(report), unsafe_allow_html=True)
     with opportunities:

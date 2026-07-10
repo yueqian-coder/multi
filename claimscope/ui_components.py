@@ -126,25 +126,31 @@ def render_discovery_evidence(report: dict) -> str:
     if not papers:
         return '<p class="muted">No papers were retrieved.</p>'
     cards = []
+    if any(paper.get("is_fixture") for paper in papers):
+        cards.append(
+            '<div class="warning-box">Synthetic fixture papers are demo data, not research evidence.</div>'
+        )
     for paper in papers:
         warning = "Abstract-only source; inspect the full paper before relying on this result." if paper.get("abstract") else "No abstract available."
-        cards.append(f"<article class=\"evidence-item\"><div><strong>{escape(str(paper.get('title', 'Untitled')))}</strong> <span class=\"muted\">{escape(str(paper.get('year') or 'n.d.'))}</span></div><p class=\"muted\">{escape(str(paper.get('source', 'unknown')))} | {escape(', '.join(paper.get('authors', [])[:3]))}</p><p>{escape(str(paper.get('abstract', '')))}</p><small class=\"warning\">{escape(warning)}</small></article>")
+        fixture_label = " | synthetic fixture" if paper.get("is_fixture") else ""
+        cards.append(f"<article class=\"evidence-item\"><div><strong>{escape(str(paper.get('title', 'Untitled')))}</strong> <span class=\"muted\">{escape(str(paper.get('year') or 'n.d.'))}</span></div><p class=\"muted\">{escape(str(paper.get('source', 'unknown')))}{fixture_label} | {escape(', '.join(paper.get('authors', [])[:3]))}</p><p>{escape(str(paper.get('abstract', '')))}</p><small class=\"warning\">{escape(warning)}</small></article>")
     return "".join(cards)
 
 
 def report_markdown(report: dict) -> str:
-    lines = ["# ClaimScope Report", "", f"**Input direction / claim:** {report.get('query', '')}", f"**Normalized claim:** {report.get('claim', '')}", "", "## Workflow Trace"]
+    lines = ["# ClaimScope Report", "", f"**Input direction / claim:** {report.get('query', '')}", f"**Normalized claim:** {report.get('claim', '')}", "", "> Evidence labels are heuristic abstract signals, not scientific adjudication.", "", "## Workflow Trace"]
     for index, step in enumerate(report.get("workflow_steps", []), 1):
         lines.append(f"{index}. **{step.get('name', '')}** - `{step.get('status', 'complete')}`")
         lines.append(f"   - Output: {step.get('output', '')}")
     lines.extend(["", "## Retrieved Papers"])
     for paper in report.get("papers", []):
-        lines.append(f"- {paper.get('title', 'Untitled')} ({paper.get('year') or 'n.d.'})")
+        fixture_label = " [synthetic fixture - not research evidence]" if paper.get("is_fixture") else ""
+        lines.append(f"- {paper.get('title', 'Untitled')} ({paper.get('year') or 'n.d.'}){fixture_label}")
         if paper.get("url"):
             lines.append(f"  - URL: {paper['url']}")
     lines.extend(["", "## Assumptions"])
     for assumption in report.get("assumptions", []):
-        lines.append(f"- **{assumption.get('text', '')}** - status: `{assumption.get('status', 'unknown')}`, risk: `{assumption.get('risk', 'medium')}`")
+        lines.append(f"- **{assumption.get('text', '')}** - heuristic abstract signal: `{assumption.get('status', 'unknown')}`, risk: `{assumption.get('risk', 'medium')}`")
     lines.extend(["", "## Opportunities"])
     for opportunity in report.get("idea_opportunities", []):
         lines.append(f"- **{opportunity.get('title', '')}** - {opportunity.get('rationale', '')}")
