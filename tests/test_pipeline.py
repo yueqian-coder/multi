@@ -1,8 +1,23 @@
+import claimscope.pipeline as pipeline_module
 from claimscope.models import Paper
 from claimscope.pipeline import ClaimScopePipeline
 from claimscope.planner import HeuristicClaimPlanner, LLMClaimPlanner
 from claimscope.retrievers import CombinedRetriever, StaticPaperRetriever
 from claimscope.llm import OpenAICompatibleClient
+from claimscope.text_utils import split_sentences
+
+
+EXPECTED_STAGE_NAMES = [
+    "research_direction",
+    "core_claim",
+    "claim_boundaries",
+    "hidden_assumptions",
+    "evidence_queries",
+    "evidence_retrieval",
+    "evidence_adjudication",
+    "opportunity_synthesis",
+    "quality_review",
+]
 
 
 def sample_papers():
@@ -144,17 +159,7 @@ def test_report_exposes_seven_step_workflow_trace():
 def test_report_exposes_stage_events_and_retrieval_limitations():
     report = build_report()
 
-    assert [event.stage for event in report.events] == [
-        "research_direction",
-        "core_claim",
-        "claim_boundaries",
-        "hidden_assumptions",
-        "evidence_queries",
-        "evidence_retrieval",
-        "evidence_adjudication",
-        "opportunity_synthesis",
-        "quality_review",
-    ]
+    assert [event.stage for event in report.events] == EXPECTED_STAGE_NAMES
     assert all(event.public_summary for event in report.events)
     assert all(
         event.status in {"complete", "degraded", "failed", "skipped"}
@@ -162,6 +167,70 @@ def test_report_exposes_stage_events_and_retrieval_limitations():
     )
     assert "abstract-only" in " ".join(report.warnings).lower()
     assert all("secret" not in event.public_summary.lower() for event in report.events)
+
+
+class ExplodingPlanner:
+    def build(self, query: str):
+        raise RuntimeError("secret-token-123 planner private chain-of-thought leaked")
+
+
+def test_planner_failure_emits_sanitized_failed_event_and_continues():
+    report = ClaimScopePipeline(
+        retriever=StaticPaperRetriever(sample_papers()),
+        planner=ExplodingPlanner(),
+    ).analyze("RAG can reliably reduce hallucination in LLM-generated answers")
+
+    assert [event.stage for event in report.events] == EXPECTED_STAGE_NAMES
+    assert len(report.events) == len(EXPECTED_STAGE_NAMES)
+    stage_counts = {
+        stage: [event.stage for event in report.events].count(stage)
+        for stage in EXPECTED_STAGE_NAMES
+    }
+    assert stage_counts == {stage: 1 for stage in EXPECTED_STAGE_NAMES}
+    assert report.events[1].stage == "core_claim"
+    assert report.events[1].status == "failed"
+    assert report.claim == "RAG can reliably reduce hallucination in LLM-generated answers"
+    assert report.assumptions
+    assert report.idea_opportunities
+
+    public_text = " ".join(
+        [event.public_summary for event in report.events] + report.warnings
+    ).lower()
+    assert "secret-token-123" not in public_text
+    assert "chain-of-thought" not in public_text
+    assert "planner private" not in public_text
+    assert any("planner failed" in warning.lower() for warning in report.warnings)
+
+
+def test_failed_adjudication_stage_uses_typed_fallbacks_and_continues(monkeypatch):
+    def explode_assumptions(*args, **kwargs):
+        raise RuntimeError("secret patient identifier from private notes")
+
+    monkeypatch.setattr(pipeline_module, "_build_assumptions", explode_assumptions)
+
+    report = ClaimScopePipeline(StaticPaperRetriever(sample_papers())).analyze(
+        "RAG can reliably reduce hallucination in LLM-generated answers"
+    )
+
+    assert [event.stage for event in report.events] == EXPECTED_STAGE_NAMES
+    assert len(report.events) == len(EXPECTED_STAGE_NAMES)
+    adjudication_event = next(
+        event for event in report.events if event.stage == "evidence_adjudication"
+    )
+    assert adjudication_event.status == "failed"
+    assert report.assumptions == []
+    assert report.idea_opportunities
+    assert report.events[-1].stage == "quality_review"
+
+    public_text = " ".join(
+        [event.public_summary for event in report.events] + report.warnings
+    ).lower()
+    assert "secret patient" not in public_text
+    assert "private notes" not in public_text
+    assert any(
+        "evidence adjudication failed" in warning.lower()
+        for warning in report.warnings
+    )
 
 
 def test_retrieval_miss_stays_unknown_not_unsupported():
@@ -261,6 +330,39 @@ def test_multilingual_and_null_result_markers_classify_conservatively():
     assert any(item.stance == "contradict" for item in evidence)
     assert all("介绍检索系统" not in item.snippet for item in evidence)
     assert any(row["Null Result"] > 0 for row in report.assumption_matrix())
+
+
+def test_split_sentences_handles_mixed_chinese_and_english_punctuation():
+    text = "检索增强生成提升事实性。However, noisy retrieval hurts accuracy.仍需外部验证？Yes!"
+
+    assert split_sentences(text) == [
+        "检索增强生成提升事实性。",
+        "However, noisy retrieval hurts accuracy.",
+        "仍需外部验证？",
+        "Yes!",
+    ]
+
+
+def test_normal_heuristic_planner_does_not_warn_about_fallback():
+    report = ClaimScopePipeline(StaticPaperRetriever([])).analyze(
+        "Retrieval improves factual generation"
+    )
+
+    assert not any("heuristic fallback" in warning.lower() for warning in report.warnings)
+
+
+def test_llm_planner_fallback_warns_about_heuristic_recovery():
+    planner = LLMClaimPlanner(
+        llm_client=FakeLLMClient("not json"),
+        fallback=HeuristicClaimPlanner(),
+    )
+    report = ClaimScopePipeline(
+        retriever=StaticPaperRetriever([]),
+        planner=planner,
+    ).analyze("Retrieval improves factual generation")
+
+    assert planner.used_planner == "heuristic"
+    assert any("heuristic fallback" in warning.lower() for warning in report.warnings)
 
 
 def test_assumption_matrix_counts_adversarial_evidence_buckets():

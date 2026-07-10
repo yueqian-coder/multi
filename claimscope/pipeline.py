@@ -110,6 +110,7 @@ class ClaimScopePipeline:
     def analyze(self, query: str, limit: int = 20) -> AnalysisReport:
         events: list[AgentEvent] = []
         warnings: list[str] = []
+        planner_recovered = False
 
         started = time.perf_counter()
         _emit_event(
@@ -123,111 +124,229 @@ class ClaimScopePipeline:
         )
 
         started = time.perf_counter()
-        plan = self.planner.build(query)
-        claim = plan.claim
-        fallback_reason = getattr(self.planner, "fallback_reason", "")
-        if fallback_reason:
-            warnings.append("Heuristic fallback used for planning; verify generated assumptions.")
-        _emit_event(
-            events,
-            "core_claim",
-            "claim_planner",
-            started,
-            "degraded" if fallback_reason else "complete",
-            "Selected a normalized, testable core claim.",
-            {"claim_present": bool(claim)},
-        )
+        try:
+            plan = self.planner.build(query)
+            claim = plan.claim
+            planner_fallback = _planner_used_heuristic_fallback(self.planner)
+            if planner_fallback:
+                warnings.append(
+                    "Heuristic fallback used for planning; verify generated assumptions."
+                )
+            _emit_event(
+                events,
+                "core_claim",
+                "claim_planner",
+                started,
+                "degraded" if planner_fallback else "complete",
+                "Selected a normalized, testable core claim.",
+                {"claim_present": bool(claim)},
+            )
+        except Exception:
+            planner_recovered = True
+            warnings.append(
+                "Planner failed; heuristic fallback used for planning; verify generated assumptions."
+            )
+            plan = HeuristicClaimPlanner().build(query)
+            claim = plan.claim
+            _emit_event(
+                events,
+                "core_claim",
+                "claim_planner",
+                started,
+                "failed",
+                "Planner failed; recovered with a conservative heuristic plan.",
+                {"claim_present": bool(claim), "recovered": True},
+            )
+
+        started = time.perf_counter()
+        try:
+            planned_variants = list(plan.claim_variants)
+            boundary_status = "complete" if planned_variants else "skipped"
+        except Exception:
+            planned_variants = []
+            boundary_status = "failed"
+            warnings.append(
+                "Claim boundary preparation failed; continuing without claim variants."
+            )
         _emit_event(
             events,
             "claim_boundaries",
             "claim_planner",
-            time.perf_counter(),
-            "complete" if plan.claim_variants else "skipped",
+            started,
+            boundary_status,
             "Prepared claim variants and boundary-condition probes.",
-            {"variant_count": len(plan.claim_variants)},
+            {"variant_count": len(planned_variants)},
         )
+
+        started = time.perf_counter()
+        try:
+            planned_assumptions = list(plan.assumptions)
+            assumption_status = "complete" if planned_assumptions else "skipped"
+        except Exception:
+            planned_assumptions = []
+            assumption_status = "failed"
+            warnings.append(
+                "Hidden assumption preparation failed; continuing without planned assumptions."
+            )
         _emit_event(
             events,
             "hidden_assumptions",
             "claim_planner",
-            time.perf_counter(),
-            "complete" if plan.assumptions else "skipped",
+            started,
+            assumption_status,
             "Identified hidden assumptions to test against retrieved evidence.",
-            {"assumption_count": len(plan.assumptions)},
+            {"assumption_count": len(planned_assumptions)},
         )
-        retrieval_queries = [claim]
-        for item in plan.assumptions:
-            retrieval_queries.extend(item.retrieval_queries)
+
+        started = time.perf_counter()
+        try:
+            retrieval_queries = [claim]
+            for item in planned_assumptions:
+                retrieval_queries.extend(item.retrieval_queries)
+            evidence_query_status = "complete" if retrieval_queries else "skipped"
+        except Exception:
+            retrieval_queries = [claim]
+            evidence_query_status = "failed"
+            warnings.append(
+                "Evidence query generation failed; continuing with the core claim only."
+            )
         _emit_event(
             events,
             "evidence_queries",
             "query_builder",
-            time.perf_counter(),
-            "complete" if retrieval_queries else "skipped",
+            started,
+            evidence_query_status,
             "Generated adversarial evidence queries.",
             {"query_count": len([item for item in retrieval_queries if item])},
         )
 
         started = time.perf_counter()
-        papers, retrieval_warnings = _targeted_search(
-            self.retriever, retrieval_queries, claim, limit
-        )
+        retrieval_failed = False
+        try:
+            papers, retrieval_warnings, retrieval_failed = _targeted_search(
+                self.retriever, retrieval_queries, claim, limit
+            )
+        except Exception:
+            papers = []
+            retrieval_warnings = [
+                "Evidence retrieval failed; continuing without retrieved papers."
+            ]
+            retrieval_failed = True
         warnings.extend(retrieval_warnings)
+        retrieval_status = "complete"
+        if retrieval_failed:
+            retrieval_status = "failed"
+        elif retrieval_warnings or not papers:
+            retrieval_status = "degraded"
         _emit_event(
             events,
             "evidence_retrieval",
             "paper_retriever",
             started,
-            "degraded" if retrieval_warnings or not papers else "complete",
+            retrieval_status,
             "Retrieved and deduplicated candidate papers.",
             {"paper_count": len(papers)},
         )
 
         started = time.perf_counter()
-        variants = _build_claim_variants(plan.claim_variants, claim, papers)
-        assumptions = _build_assumptions(plan.assumptions, papers)
-        negative_evidence = _mine_negative_evidence(papers)
+        adjudication_failed = False
+        try:
+            variants = _build_claim_variants(planned_variants, claim, papers)
+        except Exception:
+            variants = []
+            adjudication_failed = True
+            warnings.append(
+                "Evidence adjudication failed while building claim variants; continuing without variants."
+            )
+        try:
+            assumptions = _build_assumptions(planned_assumptions, papers)
+        except Exception:
+            assumptions = []
+            adjudication_failed = True
+            warnings.append(
+                "Evidence adjudication failed while mapping assumptions; continuing without assumption evidence."
+            )
+        try:
+            negative_evidence = _mine_negative_evidence(papers)
+        except Exception:
+            negative_evidence = []
+            adjudication_failed = True
+            warnings.append(
+                "Evidence adjudication failed while mining negative evidence; continuing without negative evidence."
+            )
         direct_evidence_count = sum(
             len(assumption.evidence) for assumption in assumptions
         )
+        if adjudication_failed:
+            adjudication_status = "failed"
+        elif not direct_evidence_count:
+            adjudication_status = "degraded"
+        else:
+            adjudication_status = "complete"
         _emit_event(
             events,
             "evidence_adjudication",
             "evidence_mapper",
             started,
-            "degraded" if not direct_evidence_count else "complete",
+            adjudication_status,
             "Mapped abstract evidence to assumptions with conservative stance labels.",
             {"direct_evidence_count": direct_evidence_count},
         )
 
         started = time.perf_counter()
-        opportunities = _build_idea_opportunities(assumptions, negative_evidence)
+        opportunity_failed = False
+        try:
+            opportunities = _build_idea_opportunities(assumptions, negative_evidence)
+        except Exception:
+            opportunities = []
+            opportunity_failed = True
+            warnings.append(
+                "Opportunity synthesis failed; continuing without synthesized opportunities."
+            )
+        if opportunity_failed:
+            opportunity_status = "failed"
+        elif opportunities:
+            opportunity_status = "complete"
+        else:
+            opportunity_status = "skipped"
         _emit_event(
             events,
             "opportunity_synthesis",
             "opportunity_builder",
             started,
-            "complete" if opportunities else "skipped",
+            opportunity_status,
             "Synthesized opportunity slots from gaps and negative evidence.",
             {"opportunity_count": len(opportunities)},
         )
 
         started = time.perf_counter()
-        warnings.extend(
-            _quality_warnings(
-                papers=papers,
-                assumptions=assumptions,
-                direct_evidence_count=direct_evidence_count,
-                planner=self.planner,
+        quality_failed = False
+        try:
+            warnings.extend(
+                _quality_warnings(
+                    papers=papers,
+                    assumptions=assumptions,
+                    direct_evidence_count=direct_evidence_count,
+                    planner=self.planner,
+                    planner_recovered=planner_recovered,
+                )
             )
-        )
+        except Exception:
+            quality_failed = True
+            warnings.append("Quality review failed; warnings may be incomplete.")
         warnings = _dedupe_warnings(warnings)
+        if quality_failed:
+            quality_status = "failed"
+        elif warnings:
+            quality_status = "degraded"
+        else:
+            quality_status = "complete"
         _emit_event(
             events,
             "quality_review",
             "quality_reviewer",
             started,
-            "degraded" if warnings else "complete",
+            quality_status,
             "Reviewed retrieval coverage, evidence limitations, and fallback signals.",
             {"warning_count": len(warnings)},
         )
@@ -380,15 +499,17 @@ def _mine_negative_evidence(papers: list[Paper]) -> list[NegativeEvidence]:
 
 def _targeted_search(
     retriever: PaperRetriever, queries: list[str], original_claim: str, limit: int
-) -> tuple[list[Paper], list[str]]:
+) -> tuple[list[Paper], list[str], bool]:
     seen: set[str] = set()
     papers: list[Paper] = []
     warnings: list[str] = []
+    had_failure = False
     per_query_limit = max(5, min(limit, 10))
     for query in queries:
         try:
             results = retriever.search(query, limit=per_query_limit)
         except Exception:
+            had_failure = True
             warnings.append(
                 f"Retriever {_retriever_name(retriever)} failed; retrieval may be incomplete."
             )
@@ -410,7 +531,7 @@ def _targeted_search(
         for paper in ranked
         if _relevance_score(original_claim, paper) >= 0.08
     ]
-    return relevant[:limit], _dedupe_warnings(warnings)
+    return relevant[:limit], _dedupe_warnings(warnings), had_failure
 
 
 def _build_idea_opportunities(
@@ -534,6 +655,7 @@ def _quality_warnings(
     assumptions: list[Assumption],
     direct_evidence_count: int,
     planner: ClaimPlanner,
+    planner_recovered: bool = False,
 ) -> list[str]:
     warnings: list[str] = []
     if not papers:
@@ -550,14 +672,18 @@ def _quality_warnings(
         warnings.append(
             "Quality review: abstract-only evidence; inspect full papers before relying on the report."
         )
-    if (
-        planner.__class__.__name__ == "HeuristicClaimPlanner"
-        or getattr(planner, "fallback_reason", "")
-    ):
+    if planner_recovered or _planner_used_heuristic_fallback(planner):
         warnings.append(
             "Quality review: heuristic fallback used; validate the claim plan with domain expertise."
         )
     return warnings
+
+
+def _planner_used_heuristic_fallback(planner: ClaimPlanner) -> bool:
+    return (
+        getattr(planner, "used_planner", "") == "heuristic"
+        and bool(getattr(planner, "fallback_reason", ""))
+    )
 
 
 def _dedupe_warnings(warnings: list[str]) -> list[str]:
