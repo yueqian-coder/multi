@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+from json import JSONDecodeError
 from pathlib import Path
 import re
 from statistics import mean
@@ -120,6 +121,10 @@ class ClaimScore:
     specificity: float
     overclaim_penalty: float
     components: dict[str, float]
+    required_concept_coverage: float = 1.0
+    required_concept_penalty: float = 0.0
+    forbidden_overclaim_penalty: float = 0.0
+    cue_stuffing_penalty: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -167,7 +172,12 @@ def load_cases(path: str | Path) -> list[BenchmarkCase]:
             line = raw_line.strip()
             if not line:
                 continue
-            payload = json.loads(line)
+            try:
+                payload = json.loads(line)
+            except JSONDecodeError as exc:
+                raise ValueError(
+                    f"line {line_number}: invalid JSON in benchmark case"
+                ) from exc
             case = _payload_to_case(payload, line_number=line_number)
             if case.id in seen_ids:
                 raise ValueError(f"duplicate benchmark id: {case.id}")
@@ -176,9 +186,13 @@ def load_cases(path: str | Path) -> list[BenchmarkCase]:
     return cases
 
 
-def score_claim(direction: str, result: CoreClaimResult) -> ClaimScore:
+def score_claim(
+    direction: str, result: CoreClaimResult, *, case: BenchmarkCase | None = None
+) -> ClaimScore:
     claim = result.selected_claim.strip()
     lower_claim = claim.lower()
+    required_coverage = _required_concept_coverage(claim, case)
+    forbidden_overclaim_penalty = _case_forbidden_overclaim_penalty(claim, case)
     components = {
         "slot_coverage": _slot_coverage(result),
         "declarative_form": _declarative_form(claim),
@@ -186,16 +200,36 @@ def score_claim(direction: str, result: CoreClaimResult) -> ClaimScore:
         "measurable_outcomes": _marker_score(lower_claim, MEASUREMENT_MARKERS),
         "falsifiability": _falsifiability(claim, result),
         "specificity": _specificity(direction, claim),
+        "required_concept_coverage": required_coverage,
     }
     overclaim_penalty = _overclaim_penalty(lower_claim)
+    required_concept_penalty = (1.0 - required_coverage) * 20.0
+    cue_stuffing_penalty = _cue_stuffing_penalty(lower_claim)
     weighted = sum(
         components[name] * weight for name, weight in COMPONENT_WEIGHTS.items()
     )
-    total = max(0.0, min(100.0, weighted * 100 - overclaim_penalty))
+    total = max(
+        0.0,
+        min(
+            100.0,
+            weighted * 100
+            - overclaim_penalty
+            - required_concept_penalty
+            - forbidden_overclaim_penalty
+            - cue_stuffing_penalty,
+        ),
+    )
     rounded_components = {
         name: round(value, 3) for name, value in components.items()
     }
     rounded_components["overclaim_penalty"] = round(overclaim_penalty, 2)
+    rounded_components["required_concept_penalty"] = round(
+        required_concept_penalty, 2
+    )
+    rounded_components["forbidden_overclaim_penalty"] = round(
+        forbidden_overclaim_penalty, 2
+    )
+    rounded_components["cue_stuffing_penalty"] = round(cue_stuffing_penalty, 2)
     return ClaimScore(
         total=round(total, 2),
         slot_coverage=rounded_components["slot_coverage"],
@@ -205,6 +239,10 @@ def score_claim(direction: str, result: CoreClaimResult) -> ClaimScore:
         falsifiability=rounded_components["falsifiability"],
         specificity=rounded_components["specificity"],
         overclaim_penalty=round(overclaim_penalty, 2),
+        required_concept_coverage=rounded_components["required_concept_coverage"],
+        required_concept_penalty=round(required_concept_penalty, 2),
+        forbidden_overclaim_penalty=round(forbidden_overclaim_penalty, 2),
+        cue_stuffing_penalty=round(cue_stuffing_penalty, 2),
         components=rounded_components,
     )
 
@@ -213,7 +251,7 @@ def run_benchmark(cases: list[BenchmarkCase], engine: object) -> BenchmarkReport
     case_results: list[BenchmarkCaseResult] = []
     for case in cases:
         result = engine.run(case.direction)
-        score = score_claim(case.direction, result)
+        score = score_claim(case.direction, result, case=case)
         claim = result.selected_claim
         found, missing = _concept_matches(claim, case.required_concepts)
         forbidden = _found_terms(claim, case.forbidden_overclaims)
@@ -365,6 +403,35 @@ def _specificity(direction: str, claim: str) -> float:
 def _overclaim_penalty(lower_claim: str) -> float:
     matches = [marker for marker in OVERCLAIM_MARKERS if marker in lower_claim]
     return min(35.0, 12.0 * len(matches))
+
+
+def _required_concept_coverage(claim: str, case: BenchmarkCase | None) -> float:
+    if case is None:
+        return 1.0
+    found = _found_terms(claim, case.required_concepts)
+    return len(found) / len(case.required_concepts)
+
+
+def _case_forbidden_overclaim_penalty(
+    claim: str, case: BenchmarkCase | None
+) -> float:
+    if case is None:
+        return 0.0
+    found = _found_terms(claim, case.forbidden_overclaims)
+    return min(30.0, 18.0 * len(found))
+
+
+def _cue_stuffing_penalty(lower_claim: str) -> float:
+    tokens = _tokens(lower_claim)
+    cue_matches = sum(
+        1
+        for marker in COMPARISON_MARKERS + MEASUREMENT_MARKERS + BOUNDARY_MARKERS
+        if marker in lower_claim
+    )
+    if len(tokens) <= 24 or cue_matches < 8:
+        return 0.0
+    unsupported_length = max(0, len(tokens) - 28)
+    return min(18.0, (cue_matches - 7) * 1.4 + unsupported_length * 0.25)
 
 
 def _concept_matches(claim: str, concepts: list[str]) -> tuple[list[str], list[str]]:

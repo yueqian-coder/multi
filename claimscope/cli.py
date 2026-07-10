@@ -53,10 +53,18 @@ DEMO_PAPERS = [
 
 
 def main() -> None:
-    if len(sys.argv) > 1 and sys.argv[1] == "benchmark":
+    if (
+        len(sys.argv) > 1
+        and sys.argv[1] == "benchmark"
+        and _has_explicit_benchmark_option(sys.argv[2:])
+    ):
         _run_benchmark_cli(sys.argv[2:])
         return
     _run_analysis_cli(sys.argv[1:])
+
+
+def _has_explicit_benchmark_option(argv: list[str]) -> bool:
+    return any(arg in {"--engine", "--data"} for arg in argv)
 
 
 def _run_analysis_cli(argv: list[str]) -> None:

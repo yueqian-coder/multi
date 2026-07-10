@@ -77,6 +77,99 @@ def test_unsupported_certainty_receives_inspectable_overclaim_penalty():
     assert "overclaim_penalty" in overclaimed.to_dict()
 
 
+def test_case_required_concepts_and_forbidden_overclaims_change_total():
+    benchmark = _load_benchmark_module()
+    result = make_result(
+        "Uncertainty-calibrated triage reduces false negative alerts versus an "
+        "uncalibrated classifier on held-out hospitals"
+    )
+    matching_case = benchmark.BenchmarkCase(
+        id="matching",
+        direction="AI sepsis triage",
+        domain="medical_ai",
+        required_concepts=[
+            "uncertainty-calibrated triage",
+            "false negative alerts",
+            "held-out hospitals",
+        ],
+        forbidden_overclaims=["replaces clinicians"],
+    )
+    missing_case = benchmark.BenchmarkCase(
+        id="missing",
+        direction="AI sepsis triage",
+        domain="medical_ai",
+        required_concepts=[
+            "mortality reduction",
+            "pediatric emergency departments",
+            "prospective trial",
+        ],
+        forbidden_overclaims=["replaces clinicians"],
+    )
+    forbidden_case = benchmark.BenchmarkCase(
+        id="forbidden",
+        direction="AI sepsis triage",
+        domain="medical_ai",
+        required_concepts=["uncertainty-calibrated triage"],
+        forbidden_overclaims=["held-out hospitals"],
+    )
+
+    matching = benchmark.score_claim(matching_case.direction, result, case=matching_case)
+    missing = benchmark.score_claim(missing_case.direction, result, case=missing_case)
+    forbidden = benchmark.score_claim(
+        forbidden_case.direction, result, case=forbidden_case
+    )
+
+    assert matching.total > missing.total
+    assert matching.components["required_concept_coverage"] == 1.0
+    assert missing.components["required_concept_coverage"] == 0.0
+    assert forbidden.total < matching.total
+    assert forbidden.components["forbidden_overclaim_penalty"] > 0
+    assert 0 <= forbidden.total <= 100
+
+
+def test_verbose_cue_stuffing_does_not_outrank_concise_mechanistic_claim():
+    benchmark = _load_benchmark_module()
+    concise = benchmark.score_claim(
+        "AI sepsis triage",
+        make_result(
+            "Uncertainty-calibrated triage reduces false negative alerts versus "
+            "uncalibrated triage on held-out hospitals"
+        ),
+    )
+    stuffed = benchmark.score_claim(
+        "AI sepsis triage",
+        make_result(
+            "AI improves healthcare with accuracy score rate baseline control "
+            "versus compared with held-out under when with across during randomized "
+            "ablation precision recall latency throughput yield retention completion "
+            "for every broad clinical workflow and many important outcomes"
+        ),
+    )
+
+    assert concise.total > stuffed.total
+    assert stuffed.components["cue_stuffing_penalty"] > 0
+
+
+def test_malformed_jsonl_error_names_line_without_echoing_payload(tmp_path):
+    benchmark = _load_benchmark_module()
+    data_path = tmp_path / "bad.jsonl"
+    data_path.write_text(
+        '{"id":"ok","direction":"x","domain":"ai","required_concepts":["x"],'
+        '"forbidden_overclaims":["secret"]}\n'
+        '{"id":"bad","direction":"contains test-secret",',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        benchmark.load_cases(data_path)
+
+    message = str(exc_info.value)
+    assert "line 2" in message
+    assert "invalid JSON" in message
+    assert "test-secret" not in message
+    assert "contains" not in message
+
+
 def test_claimbench_dataset_has_stable_cross_domain_case_shape():
     benchmark = _load_benchmark_module()
 
@@ -142,6 +235,42 @@ def test_benchmark_cli_writes_json_report(tmp_path):
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["summary"]["case_count"] >= 24
     assert payload["summary"]["aggregate_score"] > 0
+
+
+def test_literal_benchmark_is_preserved_as_legacy_research_direction():
+    completed = subprocess.run(
+        [sys.executable, "-m", "claimscope.cli", "benchmark"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ClaimScope Report" in completed.stdout
+    assert "**Input direction / claim:** benchmark" in completed.stdout
+
+
+def test_explicit_benchmark_options_still_select_benchmark_command():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "claimscope.cli",
+            "benchmark",
+            "--engine",
+            "heuristic",
+            "--data",
+            str(DATA_PATH),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ClaimBench" in completed.stdout
 
 
 def test_legacy_cli_still_accepts_research_direction():
