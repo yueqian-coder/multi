@@ -21,3 +21,6 @@ claimscope-mcp = "claimscope.mcp_server:main"
 
 [tool.setuptools.packages.find]
 include = ["claimscope*"]
+
+[tool.setuptools.package-data]
+claimscope = ["data/*.jsonl"]

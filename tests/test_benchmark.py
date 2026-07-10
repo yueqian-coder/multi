@@ -237,6 +237,33 @@ def test_benchmark_cli_writes_json_report(tmp_path):
     assert payload["summary"]["aggregate_score"] > 0
 
 
+def test_benchmark_cli_default_dataset_works_outside_repository(tmp_path):
+    output_path = tmp_path / "claimbench-report.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "claimscope.cli",
+            "benchmark",
+            "--engine",
+            "heuristic",
+            "--output",
+            str(output_path),
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "ClaimBench: 27 cases" in completed.stdout
+    assert json.loads(output_path.read_text(encoding="utf-8"))["summary"][
+        "case_count"
+    ] == 27
+
+
 @pytest.mark.parametrize(
     "option_builder",
     [

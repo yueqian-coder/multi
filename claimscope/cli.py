@@ -13,6 +13,9 @@ from .retrievers import ArxivRetriever, CombinedRetriever, SemanticScholarRetrie
 from .service import DEMO_PAPERS
 
 
+DEFAULT_BENCHMARK_DATA = Path(__file__).with_name("data") / "claimbench.jsonl"
+
+
 def main() -> None:
     if (
         len(sys.argv) > 1
@@ -91,7 +94,7 @@ def _run_benchmark_cli(argv: list[str]) -> None:
     parser.add_argument(
         "--data",
         type=Path,
-        default=Path("benchmarks") / "claimbench.jsonl",
+        default=DEFAULT_BENCHMARK_DATA,
         help="Path to ClaimBench JSONL cases.",
     )
     parser.add_argument("--output", type=Path, help="Optional JSON report path.")
