@@ -109,8 +109,26 @@ def add_page_number(paragraph) -> None:
     run._r.extend([begin, instr, end])
 
 
+def add_toc(paragraph) -> None:
+    paragraph.paragraph_format.first_line_indent = Cm(0)
+    run = paragraph.add_run()
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = ' TOC \\o "1-3" \\h \\z \\u '
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    text = OxmlElement("w:t")
+    text.text = "更新目录后显示章节与页码"
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run._r.extend([begin, instr, separate, text, end])
+
+
 def configure_document(doc: Document) -> None:
     section = doc.sections[0]
+    section.different_first_page_header_footer = True
     section.page_height = Cm(29.7)
     section.page_width = Cm(21)
     section.top_margin = Cm(2.2)
@@ -133,11 +151,19 @@ def configure_document(doc: Document) -> None:
         style.font.color.rgb = RGBColor.from_string(color)
         style.paragraph_format.space_before = Pt(12)
         style.paragraph_format.space_after = Pt(6)
+        style.paragraph_format.keep_with_next = True
     header = section.header.paragraphs[0]
     header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run = header.add_run("ClaimScope  |  自然语言处理课程大作业")
     set_run_font(run, "微软雅黑", 8.5, color="6A7880")
     add_page_number(section.footer.paragraphs[0])
+    section.first_page_header.paragraphs[0].clear()
+    section.first_page_footer.paragraphs[0].clear()
+    properties = doc.core_properties
+    properties.title = "ClaimScope：面向科研想法生成前的主张、假设与负面证据发现智能体"
+    properties.author = "刘子谦"
+    properties.subject = "自然语言处理课程大作业"
+    properties.keywords = "科研智能体, 多智能体, 科学主张验证, MCP"
 
 
 def add_cover(doc: Document, lines: list[str]) -> None:
@@ -161,11 +187,7 @@ def add_cover(doc: Document, lines: list[str]) -> None:
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     set_run_font(p.add_run("目录"), "微软雅黑", 18, True, BLUE)
-    for item in ["1 背景与意义", "2 需求分析与目标", "3 系统设计", "4 实现过程记录", "5 实验设计", "6 结果分析与反思", "7 总结", "参考文献", "附录"]:
-        p = doc.add_paragraph(item)
-        p.paragraph_format.left_indent = Cm(2)
-        p.paragraph_format.first_line_indent = Cm(0)
-        set_run_font(p.runs[0], "微软雅黑", 11)
+    add_toc(doc.add_paragraph())
     doc.add_page_break()
 
 
@@ -197,6 +219,7 @@ def build_report() -> Path:
     add_cover(doc, [line for line in lines[:8] if line.strip()][:4])
     index = lines.index("## 摘要")
     in_code = False
+    figure_number = 0
     while index < len(lines):
         raw = lines[index]
         line = raw.strip()
@@ -222,13 +245,14 @@ def build_report() -> Path:
             continue
         image_match = re.match(r"!\[([^]]*)\]\(([^)]+)\)", line)
         if image_match:
+            figure_number += 1
             image_path = SOURCE.parent / image_match.group(2)
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             p.paragraph_format.first_line_indent = Cm(0)
             run = p.add_run()
             run.add_picture(str(image_path), width=Cm(15.8))
-            caption = doc.add_paragraph(image_match.group(1))
+            caption = doc.add_paragraph(f"图 {figure_number}　{image_match.group(1)}")
             caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
             caption.paragraph_format.first_line_indent = Cm(0)
             set_run_font(caption.runs[0], "微软雅黑", 9, color="60717A")

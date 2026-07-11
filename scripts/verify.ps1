@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
 
 & $Python -m pytest -q
 & $Python -m compileall -q claimscope app.py
-& $Python -m py_compile scripts\build_course_report.py scripts\record_demo.py
+& $Python -m py_compile scripts\build_course_report.py scripts\record_demo.py scripts\capture_ui.py
 & $Python -m claimscope.cli benchmark --engine heuristic --output outputs\claimbench-final.json
 & $Python -m build --wheel
 

@@ -48,7 +48,7 @@ def test_release_metadata_targets_the_real_repository_and_real_ui():
     assert repository_url in citation
     assert repository_url in pyproject
     assert "github.com/claimscope/claimscope" not in readme + citation
-    assert "docs/assets/claimscope-v02-desktop.png" in readme
+    assert "docs/assets/claimscope-v03-desktop.png" in readme
     assert 'license = "MIT"' in pyproject
     assert "License :: OSI Approved" not in pyproject
 

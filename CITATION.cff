@@ -4,7 +4,8 @@ version: 0.2.0
 message: "If ClaimScope supports your work, please cite this software."
 type: software
 authors:
-  - name: ClaimScope contributors
+  - family-names: Liu
+    given-names: Ziqian
 date-released: 2026-07-11
 license: MIT
 repository-code: https://github.com/yueqian-coder/multi

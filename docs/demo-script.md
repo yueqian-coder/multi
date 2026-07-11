@@ -1,21 +1,23 @@
-# ClaimScope 60-Second Demo
+# ClaimScope 60-Second Manual Demo
 
-The submitted recording must remain below 60 seconds and include spoken Chinese narration. The recording uses deterministic offline mode and needs no API key. Re-recording requires Windows, Chrome or Edge, the project environment, and the two packages in `scripts/demo-requirements.txt`; the script starts and stops Streamlit itself. Synthetic fixture papers are shown only as UI demonstration data.
+The submitted recording must remain below 60 seconds and include the student's spoken Chinese narration. Record the deterministic offline mode so no API key appears on screen. Synthetic fixture papers are shown only as UI demonstration data.
 
 | Time | Screen action | Narration |
 |---|---|---|
-| 0-7 s | Show the default research direction and run Core Claim Arena. | ClaimScope 不直接生成 idea，而是先把模糊研究方向转成可证伪的核心主张。 |
-| 7-16 s | Show selected claim, score, falsification test, and open slots. | 结果显式展示机制、目标、预期效果、缺失比较基线、指标和边界条件。 |
-| 16-25 s | Scroll through activity and candidates. | LLM 模式由三个 proposer、两个对抗 critic 和一个 judge 交换结构化公开产物；外部服务失败时安全降级。 |
-| 25-34 s | Switch to Full Discovery and run the offline workflow. | 完整任务链继续扩展主张变体、拆解隐含假设，并生成支持、反驳、限制和零结果查询。 |
-| 34-44 s | Open Evidence and Assumption Ledger. | 证据被映射回每项假设，unknown 与 contradiction 分离，合成 fixture 也会醒目标记。 |
-| 44-52 s | Open Opportunities and Trace. | 负结果与悬而未决的假设会变成有边界、可执行的实验机会，并保留任务轨迹。 |
-| 52-59 s | Show benchmark and repository end card. | 仓库提供五个 MCP 工具、九十六项通过测试和二十七案例的 70.09 分基线；它是回归指标，不代表科学有效性。 |
+| 0-6 s | Show the default research direction. | 我实现的是 ClaimScope，它在产生研究 idea 之前，先审计一个模糊研究方向。 |
+| 6-15 s | Run Core Claim Arena. | 输入方向后，系统会抽取可证伪的核心 claim，并识别机制、目标和预期效果。 |
+| 15-24 s | Point to score, falsification test, and open slots. | 这里的分数只表示结构完整性；系统还会显示证伪实验，以及缺失的比较基线、指标和边界条件。 |
+| 24-33 s | Show Agent activity and candidate comparison. | 大模型模式包含三个 proposer、两个对抗 critic 和一个 judge；接口失败时会明确降级到确定性基线。 |
+| 33-42 s | Switch to Full Discovery and show the seven-stage rail. | 完整流程继续生成 claim 变体、隐藏假设，以及支持、反驳、限制和零结果四类检索查询。 |
+| 42-50 s | Open Assumption Ledger and Evidence. | 每条证据都会映射回具体假设，unknown 不会被误判为 contradiction，合成演示数据也会醒目标记。 |
+| 50-57 s | Open Opportunities and Trace. | 最后，悬而未决的假设和负结果会转成可执行的实验机会，并保留公开任务轨迹。 |
+| 57-60 s | Return to the project title or repository. | 系统还提供 Markdown 导出和五个 MCP 工具，可以接入其他科研工作流。 |
 
 ## Submission Notes
 
-- File name: `自然语言处理大作业-姓名-学号.mp4`
+- File name: `自然语言处理大作业-刘子谦-23354118.mp4`
 - Target duration: 55-59 seconds
 - Resolution: 1280 x 720 or higher
-- Audio: Microsoft Huihui Chinese TTS or a manually recorded replacement
+- Audio: the student's own clear Chinese narration
 - Do not display an API key, provider request body, or private research text
+- Do not describe synthetic fixtures as real papers or the `70.09` benchmark as scientific accuracy

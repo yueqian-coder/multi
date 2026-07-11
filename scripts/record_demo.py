@@ -88,7 +88,7 @@ def record_browser() -> Path:
         page = context.new_page()
         wait_for_app(page)
         page.get_by_role("button", name="Run Arena").click()
-        page.get_by_text("Selected Core Claim", exact=True).wait_for(timeout=30_000)
+        page.get_by_text("Core Claim", exact=True).wait_for(timeout=30_000)
         page.wait_for_timeout(6_000)
         page.mouse.wheel(0, 520)
         page.wait_for_timeout(4_000)
@@ -97,16 +97,16 @@ def record_browser() -> Path:
         page.get_by_text("Full Discovery", exact=True).first.click()
         page.get_by_role("button", name="Run Discovery").wait_for(timeout=20_000)
         page.get_by_role("button", name="Run Discovery").click()
-        page.get_by_text("Workflow overview", exact=True).wait_for(timeout=30_000)
+        page.get_by_text("Testable assumptions", exact=True).wait_for(timeout=30_000)
         page.wait_for_timeout(4_000)
         page.get_by_role("tab", name="Assumption Ledger").click()
-        page.wait_for_timeout(4_000)
+        page.wait_for_timeout(5_000)
         page.get_by_role("tab", name="Evidence").click()
-        page.wait_for_timeout(6_000)
+        page.wait_for_timeout(8_000)
         page.get_by_role("tab", name="Opportunities").click()
-        page.wait_for_timeout(5_000)
+        page.wait_for_timeout(7_000)
         page.get_by_role("tab", name="Trace").click()
-        page.wait_for_timeout(5_000)
+        page.wait_for_timeout(6_000)
         page.set_content(
             """
             <html><body style="margin:0;background:#f5f8f8;color:#17212b;font-family:Arial,'Microsoft YaHei',sans-serif;">
@@ -123,7 +123,7 @@ def record_browser() -> Path:
             </main></body></html>
             """
         )
-        page.wait_for_timeout(7_000)
+        page.wait_for_timeout(6_000)
         video = page.video
         context.close()
         browser.close()

@@ -2,7 +2,7 @@
 
 自然语言处理课程大作业实验报告
 
-姓名：________　学号：________　班级：________
+姓名：刘子谦　学号：23354118
 
 项目仓库：https://github.com/yueqian-coder/multi
 
@@ -63,9 +63,15 @@ Pipeline 把摘要句子映射到假设，保留 snippet offset 和 query kind�
 
 五个 MCP 工具分别为 extract_core_claim、analyze_research_direction、build_evidence_queries、evaluate_claim_benchmark 和 get_demo_report。它们使 ClaimScope 可以嵌入支持 MCP 的编辑器或上层智能体，而不需要复制 UI 逻辑。
 
+### 3.5 界面与报告设计
+
+最终界面按科研操作台而非营销页面设计。UI/UX Pro Max 的检索结果把产品归为 data-dense operational dashboard，建议使用清晰状态色、紧凑指标、可见焦点和低强度动效。实现中保留白色工作面，以海军蓝表达层级、青绿表达主要操作、琥珀表达限制、红色表达失败，并用文字标签补充颜色语义。页面新增七阶段 workflow rail、稳定尺寸的指标区、可扫读的 assumption ledger 和 opportunity cards，同时支持 390 px、768 px 与 1440 px 视口及 prefers-reduced-motion。
+
+实验报告参考 MiniMax Docx 的 CJK 排版和 OpenXML 规则：A4 页面、中文正文宋体 10.5 pt、标题微软雅黑、1.45 倍行距、自动目录字段、图表题注、首页独立页眉页脚与 Word/PDF 双格式验证。两个第三方 skill 均只作为设计与排版知识源，不参与科研结论生成。
+
 ## 4 实现过程记录
 
-第一阶段实现最小 pipeline，验证“主张→假设→证据→机会点”数据结构是否连通。第二阶段把核心主张独立为可单测模块，并加入缺失槽位、结构得分和证伪测试。第三阶段实现三 proposer、两 critic、一 judge 的竞技场，限定并发数为三，加入 JSON schema 校验和 weighted fallback。第四阶段增加证据保守语义，修正“检索不到即反驳”和“限制即否证”两类危险错误。第五阶段增加 Web 双模式、公开 Trace、下载反馈、隐私同意门和移动端适配。第六阶段建立 ClaimBench、MCP、wheel clean-install 与 CI 矩阵。
+第一阶段实现最小 pipeline，验证“主张→假设→证据→机会点”数据结构是否连通。第二阶段把核心主张独立为可单测模块，并加入缺失槽位、结构得分和证伪测试。第三阶段实现三 proposer、两 critic、一 judge 的竞技场，限定并发数为三，加入 JSON schema 校验和 weighted fallback。第四阶段增加证据保守语义，修正“检索不到即反驳”和“限制即否证”两类危险错误。第五阶段增加 Web 双模式、公开 Trace、下载反馈、隐私同意门和移动端适配。第六阶段建立 ClaimBench、MCP、wheel clean-install 与 CI 矩阵。第七阶段引入项目级 UI/UX 与文档 skill，生成可追溯设计系统，再依据实际科研工作流做界面和课程报告的收敛优化。
 
 最后验收时，直接使用机器全局 Python 得到 86 passed、8 failed。分析发现失败来自该解释器没有安装项目、MCP extras 和 console scripts，而非业务逻辑回归。随后创建隔离 `.venv`，执行 `pip install -e ".[web,mcp,dev]"`，在同一解释器中全部 96 项测试通过。该过程说明安装态测试必须在声明的依赖环境中运行，也促使最终文档提供一条完整安装命令。
 
@@ -93,11 +99,11 @@ ClaimBench 包含 27 个内部构造样例，覆盖 9 个领域，每个领域 3
 | MCP 工具 | 5 | 均可通过 stdio 列出 |
 | 多智能体角色 | 6 | 3 proposer + 2 critic + 1 judge |
 | 工作流阶段 | 7 | 从方向到机会点 |
-| UI 验证视口 | 2 | 1280×720 与 390×844 |
+| UI 验证视口 | 3 | 390×844、768×1024 与 1440×900 |
 
 典型输入为“RAG can reliably reduce hallucination in LLM-generated answers”。启发式抽取识别出机制、目标和预期效果，同时指出 comparison baseline、evaluation metric、boundary conditions 三个未填槽位，结构置信度为 0.50。完整离线流程产生 4 个假设、四方向查询、证据矩阵、负面证据和可执行机会点。界面明确显示 “Synthetic fixture papers are demo data, not research evidence”。
 
-![Desktop experiment](assets/claimscope-v02-desktop.png)
+![Desktop experiment](assets/claimscope-v03-desktop.png)
 
 系统在故障路径上也有可验证行为：不相关主张不会错误绑定 fixture；retrieval miss 保持 unknown；neutral mention 不会转成 negative evidence；单个 retriever 失败会变成脱敏 warning；LLM proposer、critic 或 judge 失败时会保留其他公开产物并标记 degraded。
 
@@ -123,6 +129,10 @@ ClaimScope 完成了一个可运行、可降级、可追溯的科研前置智能
 
 [4] Skarlinski M D, Cox S, Laurent J M, et al. Language agents achieve superhuman synthesis of scientific knowledge. 2024. https://arxiv.org/abs/2409.13740
 
+[5] MiniMax-AI. MiniMax Skills. https://github.com/MiniMax-AI/skills
+
+[6] NextLevelBuilder. UI/UX Pro Max Skill. https://github.com/nextlevelbuilder/ui-ux-pro-max-skill
+
 ## 附录 A 复现命令
 
 ```text
@@ -135,4 +145,4 @@ python -m venv .venv
 
 ## 附录 B 提交检查
 
-报告和视频文件名需替换姓名、学号；视频不超过 1 分钟并含语音；提交前不得在画面、报告、Git 历史或附件中出现 API key；离线 fixture 必须标记为演示数据。
+报告和视频文件名为“自然语言处理大作业-刘子谦-23354118”；视频不超过 1 分钟并含语音；提交前不得在画面、报告、Git 历史或附件中出现 API key；离线 fixture 必须标记为演示数据。

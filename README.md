@@ -9,7 +9,7 @@ ClaimScope turns a fuzzy research direction into a falsifiable claim, an assumpt
 
 > Open-source pre-ideation research tooling: deterministic by default, evidence-first, and explicit about uncertainty.
 
-![ClaimScope Core Claim Arena running in deterministic demo mode](docs/assets/claimscope-v02-desktop.png)
+![ClaimScope Core Claim Arena running in deterministic demo mode](docs/assets/claimscope-v03-desktop.png)
 
 ## 30-second Quick Start
 
@@ -87,9 +87,19 @@ Detailed diagrams, module contracts, and failure behavior are documented in [Sys
 
 - [Editable course report](deliverables/ClaimScope-course-report.docx)
 - [Rendered course report](deliverables/ClaimScope-course-report.pdf)
-- [58-second narrated demo](deliverables/ClaimScope-demo.mp4)
+- [Manual 60-second recording guide](docs/demo-script.md)
 
-The report keeps name and student-number placeholders so the repository does not publish personal information. Replace them and rename both submission files before sending the assignment.
+The report contains the student identity provided for the course submission. The final submission copies use the required Chinese filename.
+
+## Project Skills
+
+Install the pinned [MiniMax skills collection](https://github.com/MiniMax-AI/skills) and [UI/UX Pro Max](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) into this project with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-skills.ps1
+```
+
+Third-party files stay local under `.codex/`; the reproducible installer and generated [ClaimScope design system](design-system/claimscope/MASTER.md) are versioned.
 
 ## Limitations
 

@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 .worktrees/
 .superpowers/
+.codex/minimax-skills/
+.codex/skills/
 *.pyc
 *.pyo
 *.egg-info/
