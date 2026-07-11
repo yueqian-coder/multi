@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import time
 
+from .core_claim import AgentEventCallback
 from .models import (
     AgentEvent,
     AnalysisReport,
@@ -22,6 +23,10 @@ from .planner import (
 )
 from .retrievers import PaperRetriever
 from .text_utils import keywords, overlap_score, split_sentences, truncate
+
+
+class EvidenceRetrievalRequired(RuntimeError):
+    pass
 
 
 SUPPORT_MARKERS = (
@@ -95,6 +100,8 @@ NULL_RESULT_MARKERS = (
 class ClaimScopePipeline:
     retriever: PaperRetriever
     planner: ClaimPlanner = field(default_factory=HeuristicClaimPlanner)
+    allow_planner_fallback: bool = True
+    require_retrieval_evidence: bool = False
 
     @classmethod
     def from_env(cls, retriever: PaperRetriever) -> "ClaimScopePipeline":
@@ -107,7 +114,12 @@ class ClaimScopePipeline:
             planner = HeuristicClaimPlanner()
         return cls(retriever=retriever, planner=planner)
 
-    def analyze(self, query: str, limit: int = 20) -> AnalysisReport:
+    def analyze(
+        self,
+        query: str,
+        limit: int = 20,
+        on_event: AgentEventCallback | None = None,
+    ) -> AnalysisReport:
         events: list[AgentEvent] = []
         warnings: list[str] = []
         planner_recovered = False
@@ -125,8 +137,14 @@ class ClaimScopePipeline:
 
         started = time.perf_counter()
         try:
-            plan = self.planner.build(query)
+            if isinstance(self.planner, LLMClaimPlanner):
+                plan = self.planner.build(query, on_event=on_event)
+            else:
+                plan = self.planner.build(query)
             claim = plan.claim
+            arena_result = getattr(self.planner, "last_core_claim_result", None)
+            if arena_result is not None:
+                events.extend(arena_result.events)
             planner_fallback = _planner_used_heuristic_fallback(self.planner)
             if planner_fallback:
                 warnings.append(
@@ -142,6 +160,8 @@ class ClaimScopePipeline:
                 {"claim_present": bool(claim)},
             )
         except Exception:
+            if not self.allow_planner_fallback:
+                raise
             planner_recovered = True
             warnings.append(
                 "Planner failed; heuristic fallback used for planning; verify generated assumptions."
@@ -247,6 +267,10 @@ class ClaimScopePipeline:
             "Retrieved and deduplicated candidate papers.",
             {"paper_count": len(papers)},
         )
+        if self.require_retrieval_evidence and not papers:
+            raise EvidenceRetrievalRequired(
+                "Strict discovery requires at least one retrieved paper."
+            )
 
         started = time.perf_counter()
         adjudication_failed = False

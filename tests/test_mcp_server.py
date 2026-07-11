@@ -6,6 +6,8 @@ import textwrap
 from importlib.metadata import entry_points
 from pathlib import Path
 
+import pytest
+
 from claimscope.service import ClaimScopeService
 
 
@@ -23,6 +25,18 @@ def test_service_uses_injected_heuristic_planner():
     payload = service.extract_core_claim("a research direction", mode="heuristic")
 
     assert payload["selected_claim"] == "Injected claim for a research direction"
+
+
+def test_service_strict_agent_mode_requires_a_provider(monkeypatch):
+    from claimscope.service import AgentProviderRequired
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    with pytest.raises(AgentProviderRequired):
+        ClaimScopeService().extract_core_claim(
+            "a research direction", mode="llm_strict"
+        )
 
 
 def test_mcp_module_import_has_no_server_side_effect():

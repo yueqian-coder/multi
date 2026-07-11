@@ -7,9 +7,9 @@
 
 ClaimScope turns a fuzzy research direction into a falsifiable claim, an assumption ledger, adversarial evidence queries, and bounded experiment opportunities before you commit to an idea.
 
-> Open-source pre-ideation research tooling: deterministic by default, evidence-first, and explicit about uncertainty.
+> Open-source pre-ideation research tooling: adversarial by design, evidence-first, and explicit about uncertainty.
 
-![ClaimScope Core Claim Arena running in deterministic demo mode](docs/assets/claimscope-v03-desktop.png)
+![ClaimScope strict six-agent result](docs/assets/claimscope-v05-result.png)
 
 ## 30-second Quick Start
 
@@ -19,11 +19,11 @@ python -m claimscope.cli "RAG can reliably reduce hallucination in LLM-generated
 streamlit run app.py
 ```
 
-The offline demo uses bundled **synthetic fixture papers**, requires no API key, and is reproducible apart from report timestamps. The screenshot above is the running keyless demo; files ending in `-concept.png` are design references only.
+The CLI command is a deterministic offline baseline. The Web app is the final strict-agent surface: configure an OpenAI-compatible Provider in the session-only settings, approve remote processing, and run all six roles. It never substitutes a heuristic result when a Web agent stage fails.
 
 ## Core Claim Arena
 
-Core Claim Arena extracts a candidate claim, exposes the method, target, expected effect, missing information, falsification test, a structural candidate score, and a public activity trace. The score measures claim completeness, not epistemic confidence. The heuristic engine is deterministic and works offline; optional multi-agent LLM mode is available through the service and MCP surfaces when configured.
+Core Claim Arena runs three proposers, two adversarial critics, and one judge. During execution the bilingual UI streams `Proposer -> Critic -> Judge` status. Afterward, each role can be expanded to inspect its public input summary, candidates, six-axis scores, reason codes, revisions, and final selection. These are structured public artifacts, not private chain-of-thought. The score measures claim completeness, not epistemic confidence.
 
 ## Full Assumption / Evidence Workflow
 
@@ -53,7 +53,13 @@ python -m claimscope.mcp_server
 
 The five tools are `extract_core_claim`, `analyze_research_direction`, `build_evidence_queries`, `evaluate_claim_benchmark`, and `get_demo_report`. Optional LLM configuration uses placeholders only: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `MODEL_NAME`. Keys are read from environment variables or an in-memory UI field and are never written to reports.
 
-The UI requires explicit consent before sending research directions to a configured LLM provider or generated search queries to public academic APIs. CLI and MCP users opt in by configuring environment variables or setting `online=true`; do not submit confidential research text to providers you do not trust.
+The UI requires explicit consent before sending research directions to a configured LLM provider or generated search queries to public academic APIs. Full Discovery in the Web app always uses live academic retrieval; there is no synthetic Web result path. CLI and MCP users opt in by configuring environment variables or setting `online=true`; do not submit confidential research text to providers you do not trust.
+
+Safely check model availability without putting a key in shell history:
+
+```bash
+python scripts/probe_provider.py --list-models
+```
 
 Minimal MCP client configuration after installation:
 
@@ -107,7 +113,8 @@ Third-party files stay local under `.codex/`; the reproducible installer and gen
 - Online retrieval is abstract/snippet-oriented and is not a substitute for full papers.
 - Evidence labels are heuristic abstract-match signals, not verified scientific support or disproof.
 - Heuristic scores are transparent signals, not scientific validity judgments.
-- LLM mode depends on a configured endpoint and can degrade to heuristics.
+- Strict Web agent runs depend on a configured endpoint and fail visibly instead of degrading to heuristics.
+- CLI and MCP retain explicit heuristic modes for offline regression and testing.
 - ClaimBench is a smoke benchmark, not a claim of general research-agent quality.
 
 ## Roadmap

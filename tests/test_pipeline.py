@@ -1,4 +1,7 @@
+import json
+
 import claimscope.pipeline as pipeline_module
+import pytest
 from claimscope.models import Paper
 from claimscope.pipeline import ClaimScopePipeline
 from claimscope.planner import HeuristicClaimPlanner, LLMClaimPlanner
@@ -242,6 +245,16 @@ def test_retrieval_miss_stays_unknown_not_unsupported():
     assert report.assumptions
     assert all(item.status == "unknown" for item in report.assumptions)
     assert any("zero papers" in warning.lower() for warning in report.warnings)
+
+
+def test_strict_discovery_rejects_zero_retrieved_papers():
+    pipeline = ClaimScopePipeline(
+        StaticPaperRetriever([]),
+        require_retrieval_evidence=True,
+    )
+
+    with pytest.raises(pipeline_module.EvidenceRetrievalRequired):
+        pipeline.analyze("Diffusion models improve MRI segmentation")
 
 
 def test_paper_and_evidence_expose_auditable_provenance_defaults():
@@ -491,6 +504,111 @@ class FakeLLMClient:
 class FailingLLMClient:
     def chat(self, messages, temperature=0.2):
         raise RuntimeError("gateway unavailable")
+
+
+class StrictDiscoveryFakeLLM:
+    claim = (
+        "Evidence-grounded RAG reduces unsupported medical QA answers versus a "
+        "no-retrieval baseline under clinician-reviewed evaluation."
+    )
+
+    def chat(self, messages, temperature=0.2, timeout=None):
+        content = "\n".join(message["content"] for message in messages)
+        if "research-planning module" in content:
+            return json.dumps(
+                {
+                    "normalized_claim": "must be replaced by arena claim",
+                    "claim_variants": [
+                        {"text": f"Boundary {index}", "rationale": "Test boundary"}
+                        for index in range(1, 4)
+                    ],
+                    "assumptions": [
+                        {
+                            "text": f"Assumption {index}",
+                            "support_query": f"support {index}",
+                            "contradict_query": f"contradict {index}",
+                            "limitation_query": f"limitation {index}",
+                            "null_result_query": f"null result {index}",
+                        }
+                        for index in range(1, 5)
+                    ],
+                }
+            )
+        if "judge" in content:
+            return json.dumps(
+                {
+                    "selected_candidate_id": "operationalizer",
+                    "final_claim": self.claim,
+                    "falsification_test": "Compare unsupported-answer rates.",
+                    "unresolved_ambiguities": [],
+                }
+            )
+        if "critic" in content:
+            return json.dumps(
+                {
+                    "critiques": [
+                        {
+                            "candidate_id": role,
+                            "rubric_scores": {
+                                "specificity": 4,
+                                "falsifiability": 4,
+                                "mechanism": 4,
+                                "scope": 4,
+                                "measurability": 4,
+                                "risk_awareness": 4,
+                            },
+                            "reason_codes": ["bounded"],
+                            "revision": self.claim,
+                        }
+                        for role in [
+                            "operationalizer",
+                            "mechanism_analyst",
+                            "skeptical_empiricist",
+                        ]
+                    ]
+                }
+            )
+        return json.dumps(
+            {
+                "claim": self.claim,
+                "method_or_mechanism": "evidence-grounded RAG",
+                "target_or_task": "medical QA",
+                "expected_effect": "reduces unsupported answers",
+                "conditions": ["clinician-reviewed evaluation"],
+                "falsification_test": "Compare unsupported-answer rates.",
+                "missing_information": [],
+                "confidence": 0.8,
+            }
+        )
+
+
+def test_strict_discovery_runs_six_role_arena_before_planning():
+    streamed = []
+    planner = LLMClaimPlanner(
+        llm_client=StrictDiscoveryFakeLLM(),
+        strict=True,
+    )
+    report = ClaimScopePipeline(
+        retriever=StaticPaperRetriever(sample_papers()),
+        planner=planner,
+        allow_planner_fallback=False,
+        require_retrieval_evidence=True,
+    ).analyze(
+        "Can RAG make medical QA safer?",
+        on_event=streamed.append,
+    )
+
+    expected_roles = {
+        "operationalizer",
+        "mechanism_analyst",
+        "skeptical_empiricist",
+        "falsifiability_critic",
+        "scope_critic",
+        "judge",
+    }
+    assert report.claim == StrictDiscoveryFakeLLM.claim.rstrip(".")
+    assert {event.role for event in streamed} == expected_roles
+    assert expected_roles <= {event.role for event in report.events}
 
 
 def test_llm_core_claim_extraction_accepts_core_claim_only_json():

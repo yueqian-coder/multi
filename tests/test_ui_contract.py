@@ -35,9 +35,9 @@ def test_ui_keeps_mode_selector_below_streamlit_header():
 
 def test_ui_composes_header_and_research_controls_as_real_containers():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert "def render_header() -> str:" in source
-    assert "mode = render_header()" in source
-    assert "def render_research_controls(mode: str)" in source
+    assert "def render_header(language: str)" in source
+    assert "mode, language = render_header(language)" in source
+    assert "def render_research_controls(mode: str, language: str)" in source
     assert "\ufffd" not in source
 
 
@@ -77,6 +77,25 @@ def test_result_summary_uses_public_events_only():
     )
     assert rows[0]["role"] == "Operationalizer"
     assert rows[0]["summary"] == "Defined measurable variables."
+
+
+def test_result_summary_localizes_known_agent_status_in_chinese():
+    from claimscope.ui_components import public_event_rows
+
+    rows = public_event_rows(
+        {
+            "events": [
+                {
+                    "role": "operationalizer",
+                    "status": "failed",
+                    "public_summary": "The proposer did not return a usable public claim.",
+                }
+            ]
+        },
+        language="zh",
+    )
+
+    assert rows[0]["summary"] == "该提案角色没有返回可用的公开候选主张。"
 
 
 def test_activity_markup_is_streamlit_safe_and_keeps_the_full_trace():
@@ -158,3 +177,62 @@ def test_ui_names_candidate_score_honestly_and_requires_network_consent():
     assert "Allow research directions to be sent" in source
     assert "Allow generated queries to be sent" in source
     assert "Open claim slots" in source
+
+
+def test_web_ui_is_bilingual_and_uses_strict_real_agents():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    assert "中文" in source
+    assert "Core Claim Arena" in source
+    assert "核心主张竞技场" in source
+    assert 'mode="llm_strict"' in source
+    assert "strict_agent=True" in source
+    assert "demo / heuristic" not in source
+
+
+def test_web_ui_streams_public_agent_progress_and_exposes_artifacts():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    assert "on_event=on_agent_event" in source
+    assert "Public execution trace" in source
+    assert "公开执行轨迹" in source
+    assert "def render_agent_inspector" in source
+    assert "rubric_scores" in source
+    assert "reason_codes" in source
+    assert "revision" in source
+
+
+def test_web_discovery_always_uses_live_academic_retrieval():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    assert "online=True" in source
+    assert "Use online academic retrieval" not in source
+    assert "DEMO_PAPERS" not in source
+
+
+def test_provider_requires_explicit_consent_and_secure_transport():
+    from app import provider_configuration_ready
+
+    assert not provider_configuration_ready(
+        "environment-key",
+        "https://provider.example/v1",
+        approved=False,
+    )
+    assert not provider_configuration_ready(
+        "session-key",
+        "http://provider.example/v1",
+        approved=True,
+    )
+    assert provider_configuration_ready(
+        "session-key",
+        "https://provider.example/v1",
+        approved=True,
+    )
+
+
+def test_results_are_never_reused_for_a_different_direction():
+    from app import result_for_direction
+
+    result = {"direction": "old direction", "selected_claim": "old claim"}
+    assert result_for_direction(result, "new direction", "direction") is None
+    assert result_for_direction(result, "old direction", "direction") == result

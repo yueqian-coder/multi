@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .benchmark import load_cases, run_benchmark
-from .core_claim import HeuristicCoreClaimEngine
+from .core_claim import AgentEventCallback, HeuristicCoreClaimEngine
 from .llm import OpenAICompatibleClient
 from .models import AnalysisReport, Paper
 from .pipeline import ClaimScopePipeline
@@ -59,6 +59,10 @@ DEMO_PAPERS = [
 ]
 
 
+class AgentProviderRequired(RuntimeError):
+    pass
+
+
 class ClaimScopeService:
     def __init__(
         self,
@@ -81,23 +85,40 @@ class ClaimScopeService:
     def from_env(cls) -> "ClaimScopeService":
         return cls(llm_client=OpenAICompatibleClient.from_env())
 
-    def extract_core_claim(self, direction: str, mode: str = "auto") -> dict:
+    def extract_core_claim(
+        self,
+        direction: str,
+        mode: str = "auto",
+        on_event: AgentEventCallback | None = None,
+    ) -> dict:
         planner = self._planner_for_mode(mode)
         extractor = getattr(planner, "extract_core_claim_result", None)
         if extractor:
-            result = extractor(direction)
+            if isinstance(planner, LLMClaimPlanner):
+                result = extractor(direction, on_event=on_event)
+            else:
+                result = extractor(direction)
         else:
             result = HeuristicCoreClaimEngine().run(planner.extract_core_claim(direction))
         return _jsonable(result)
 
     def analyze_research_direction(
-        self, direction: str, online: bool = False, limit: int = 12
+        self,
+        direction: str,
+        online: bool = False,
+        limit: int = 12,
+        strict_agent: bool = False,
+        on_event: AgentEventCallback | None = None,
     ) -> dict:
         pipeline = ClaimScopePipeline(
             retriever=self.online_retriever if online else self.offline_retriever,
-            planner=self._planner_for_mode("auto"),
+            planner=self._planner_for_mode("llm_strict" if strict_agent else "auto"),
+            allow_planner_fallback=not strict_agent,
+            require_retrieval_evidence=strict_agent,
         )
-        return _analysis_payload(pipeline.analyze(direction, limit=limit))
+        return _analysis_payload(
+            pipeline.analyze(direction, limit=limit, on_event=on_event)
+        )
 
     def build_evidence_queries(self, direction: str, mode: str = "auto") -> dict:
         plan = self._planner_for_mode(mode).build(direction)
@@ -121,11 +142,16 @@ class ClaimScopeService:
         normalized = mode.strip().lower()
         if normalized == "heuristic":
             return self.heuristic_planner
-        if normalized not in {"auto", "llm"}:
-            raise ValueError("mode must be one of: auto, heuristic, llm")
+        if normalized not in {"auto", "llm", "llm_strict"}:
+            raise ValueError("mode must be one of: auto, heuristic, llm, llm_strict")
         llm_client = self.llm_client or OpenAICompatibleClient.from_env()
         if llm_client:
-            return LLMClaimPlanner(llm_client=llm_client)
+            return LLMClaimPlanner(
+                llm_client=llm_client,
+                strict=normalized == "llm_strict",
+            )
+        if normalized == "llm_strict":
+            raise AgentProviderRequired("A configured LLM provider is required.")
         return self.heuristic_planner
 
 

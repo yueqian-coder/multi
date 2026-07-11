@@ -5,6 +5,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 
 class OpenAICompatibleClientError(RuntimeError):
@@ -22,6 +23,15 @@ class OpenAICompatibleClient:
     base_url: str
     model: str
     timeout: float = 60
+
+    def __post_init__(self) -> None:
+        parsed = urlparse(self.base_url.strip())
+        local_hosts = {"localhost", "127.0.0.1", "::1"}
+        if parsed.scheme == "https" and parsed.netloc:
+            return
+        if parsed.scheme == "http" and parsed.hostname in local_hosts:
+            return
+        raise ValueError("Remote OpenAI-compatible providers must use HTTPS.")
 
     @classmethod
     def from_env(cls) -> "OpenAICompatibleClient | None":

@@ -413,6 +413,93 @@ def test_arena_runs_three_proposers_two_critics_and_judge():
     assert len(result.events) == 6
 
 
+def test_arena_streams_public_running_and_terminal_events():
+    module = importlib.import_module("claimscope.core_claim")
+    streamed = []
+
+    result = module.CoreClaimArena(RoleAwareFakeLLM()).run(
+        "Can retrieval make medical QA safer?",
+        on_event=streamed.append,
+    )
+
+    roles = {
+        "operationalizer",
+        "mechanism_analyst",
+        "skeptical_empiricist",
+        "falsifiability_critic",
+        "scope_critic",
+        "judge",
+    }
+    for role in roles:
+        statuses = [event.status for event in streamed if event.role == role]
+        assert statuses[0] == "running"
+        assert statuses[-1] in {"complete", "degraded"}
+    assert result.mode == "multi_agent"
+    assert all("private" not in event.artifacts for event in streamed)
+
+
+def test_strict_arena_never_substitutes_heuristic_result():
+    module = importlib.import_module("claimscope.core_claim")
+
+    class AlwaysFailingLLM:
+        def chat(self, messages, temperature=0.2, timeout=None):
+            raise RuntimeError("provider unavailable")
+
+    with pytest.raises(module.CoreClaimArenaError):
+        module.CoreClaimArena(
+            AlwaysFailingLLM(), allow_heuristic_fallback=False
+        ).run("Can retrieval make medical QA safer?")
+
+
+def test_strict_arena_requires_every_public_agent_artifact():
+    module = importlib.import_module("claimscope.core_claim")
+
+    with pytest.raises(module.CoreClaimArenaError):
+        module.CoreClaimArena(
+            FailingProposerFakeLLM(), allow_heuristic_fallback=False
+        ).run("Can retrieval make medical QA safer?")
+
+
+def test_strict_arena_rejects_parseable_but_incomplete_candidate_json():
+    module = importlib.import_module("claimscope.core_claim")
+
+    class IncompleteCandidateLLM(RoleAwareFakeLLM):
+        def chat(self, messages, temperature=0.2, timeout=None):
+            content = "\n".join(message["content"] for message in messages)
+            if any(role in content for role in _proposer_role_names()):
+                return json.dumps({"claim": "Only a claim"})
+            return super().chat(messages, temperature=temperature, timeout=timeout)
+
+    with pytest.raises(module.CoreClaimArenaError):
+        module.CoreClaimArena(
+            IncompleteCandidateLLM(), allow_heuristic_fallback=False
+        ).run("Can retrieval make medical QA safer?")
+
+
+def test_agent_event_callback_failure_does_not_abort_arena():
+    module = importlib.import_module("claimscope.core_claim")
+
+    def broken_callback(event):
+        raise RuntimeError("rendering failed")
+
+    result = module.CoreClaimArena(RoleAwareFakeLLM()).run(
+        "Can retrieval make medical QA safer?",
+        on_event=broken_callback,
+    )
+
+    assert result.selected_claim == RoleAwareFakeLLM.expected_judgment
+
+    with pytest.raises(module.CoreClaimArenaError):
+        module.CoreClaimArena(
+            FailingCriticFakeLLM(), allow_heuristic_fallback=False
+        ).run("Can retrieval make medical QA safer?")
+
+    with pytest.raises(module.CoreClaimArenaError):
+        module.CoreClaimArena(
+            JudgeFailingFakeLLM(), allow_heuristic_fallback=False
+        ).run("Can retrieval make medical QA safer?")
+
+
 def test_arena_falls_back_to_weighted_candidate_when_judge_fails():
     module = importlib.import_module("claimscope.core_claim")
 
@@ -639,6 +726,24 @@ def test_llm_client_keeps_temperature_for_chat_models(monkeypatch):
 
     assert client.chat([{"role": "user", "content": "hello"}], temperature=0.1) == "ok"
     assert payloads[0]["temperature"] == 0.1
+
+
+def test_llm_client_rejects_insecure_remote_base_url():
+    module = importlib.import_module("claimscope.llm")
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        module.OpenAICompatibleClient(
+            api_key="test-secret",
+            base_url="http://llm.example/v1",
+            model="fake-model",
+        )
+
+    local = module.OpenAICompatibleClient(
+        api_key="test-secret",
+        base_url="http://127.0.0.1:8765/v1",
+        model="fake-model",
+    )
+    assert local.base_url.startswith("http://127.0.0.1")
 
 
 def test_llm_client_exhausted_retry_error_is_sanitized(monkeypatch):

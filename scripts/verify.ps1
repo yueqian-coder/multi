@@ -6,11 +6,11 @@ if (-not (Test-Path -LiteralPath $Python)) {
     python -m venv (Join-Path $RepoRoot ".venv")
     & $Python -m pip install -e "$RepoRoot[web,mcp,dev]" build
 }
-& $Python -m pip install -r scripts\demo-requirements.txt | Out-Null
+& $Python -m pip install -r scripts\ui-requirements.txt | Out-Null
 
 & $Python -m pytest -q
 & $Python -m compileall -q claimscope app.py
-& $Python -m py_compile scripts\build_course_report.py scripts\record_demo.py scripts\capture_ui.py
+& $Python -m py_compile scripts\build_course_report.py scripts\build_course_pdf.py scripts\probe_provider.py scripts\capture_ui.py
 & $Python -m claimscope.cli benchmark --engine heuristic --output outputs\claimbench-final.json
 & $Python -m build --wheel
 
@@ -46,13 +46,11 @@ try {
     if ($StartedServer -and -not $StartedServer.HasExited) { Stop-Process -Id $StartedServer.Id }
 }
 
-foreach ($artifact in "ClaimScope-course-report.docx","ClaimScope-course-report.pdf","ClaimScope-demo.mp4") {
+foreach ($artifact in "ClaimScope-course-report.docx","ClaimScope-course-report.pdf") {
     if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot "deliverables\$artifact"))) {
         throw "Missing review artifact: $artifact"
     }
 }
-
-& $Python -c "import imageio_ffmpeg,pathlib; p=pathlib.Path('deliverables/ClaimScope-demo.mp4'); frames,seconds=imageio_ffmpeg.count_frames_and_secs(p); assert 0 < seconds < 60, seconds; print(f'VIDEO {frames} frames {seconds:.1f}s')"
 
 $secretPatterns = @(
     'sk-[A-Za-z0-9_-]{32,}',

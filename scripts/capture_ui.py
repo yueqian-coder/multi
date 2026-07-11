@@ -1,26 +1,62 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import time
+import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from record_demo import URL, browser_executable, start_app
-
-
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / "docs" / "assets"
+URL = os.getenv("CLAIMSCOPE_UI_URL", "http://localhost:8507")
+BROWSER_CANDIDATES = [
+    Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+    Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+    Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+]
+
+
+def app_is_running() -> bool:
+    try:
+        return urllib.request.urlopen(f"{URL}/_stcore/health", timeout=2).read().strip() == b"ok"
+    except Exception:
+        return False
+
+
+def start_app() -> subprocess.Popen | None:
+    if app_is_running():
+        return None
+    process = subprocess.Popen(
+        [sys.executable, "-m", "streamlit", "run", "app.py", "--server.headless", "true", "--server.port", "8507"],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    for _ in range(40):
+        if app_is_running():
+            return process
+        if process.poll() is not None:
+            raise RuntimeError("Streamlit exited before becoming healthy.")
+        time.sleep(0.5)
+    process.terminate()
+    raise RuntimeError("Timed out waiting for Streamlit health check.")
+
+
+def browser_executable() -> Path:
+    try:
+        return next(path for path in BROWSER_CANDIDATES if path.exists())
+    except StopIteration as error:
+        raise RuntimeError("Install Chrome or Edge, or update BROWSER_CANDIDATES.") from error
 
 
 def wait_for_ready(page) -> None:
     page.goto(URL, wait_until="domcontentloaded", timeout=60_000)
     page.get_by_text("ClaimScope", exact=True).wait_for(timeout=60_000)
     page.wait_for_timeout(1_500)
-
-
-def run_arena(page) -> None:
-    page.get_by_role("button", name="Run Arena").click()
-    page.get_by_text("Core Claim", exact=True).wait_for(timeout=30_000)
-    page.wait_for_timeout(1_000)
 
 
 def main() -> None:
@@ -37,19 +73,23 @@ def main() -> None:
                 context = browser.new_context(viewport={"width": width, "height": height})
                 page = context.new_page()
                 wait_for_ready(page)
-                run_arena(page)
-                page.screenshot(path=ASSETS / f"claimscope-v03-{name}.png", full_page=False)
+                page.screenshot(path=ASSETS / f"claimscope-v04-{name}.png", full_page=False)
                 context.close()
 
             context = browser.new_context(viewport={"width": 1440, "height": 900})
             page = context.new_page()
             wait_for_ready(page)
-            page.get_by_text("Full Discovery", exact=True).first.click()
-            page.get_by_role("button", name="Run Discovery").click()
-            page.get_by_text("Testable assumptions", exact=True).wait_for(timeout=30_000)
-            page.get_by_role("tab", name="Evidence").click()
-            page.wait_for_timeout(1_000)
-            page.screenshot(path=ASSETS / "claimscope-v03-discovery.png", full_page=False)
+            page.get_by_text("EN", exact=True).click()
+            page.get_by_text("Research direction", exact=True).first.wait_for(timeout=30_000)
+            page.screenshot(path=ASSETS / "claimscope-v04-english.png", full_page=False)
+            context.close()
+
+            context = browser.new_context(viewport={"width": 1440, "height": 900})
+            page = context.new_page()
+            wait_for_ready(page)
+            page.get_by_text("完整研究发现", exact=True).first.click()
+            page.get_by_text("最多检索论文数", exact=True).wait_for(timeout=30_000)
+            page.screenshot(path=ASSETS / "claimscope-v04-discovery.png", full_page=False)
             context.close()
             browser.close()
     finally:

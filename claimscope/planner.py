@@ -5,7 +5,9 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from .core_claim import (
+    AgentEventCallback,
     CoreClaimArena,
+    CoreClaimArenaError,
     HeuristicCoreClaimEngine,
     PROPOSER_ROLES,
     with_selected_claim,
@@ -139,11 +141,21 @@ class LLMClaimPlanner:
     max_assumptions: int = 8
     used_planner: str = field(default="llm", init=False)
     fallback_reason: str = field(default="", init=False)
+    strict: bool = False
+    last_core_claim_result: CoreClaimResult | None = field(default=None, init=False)
 
-    def extract_core_claim_result(self, query: str) -> CoreClaimResult:
+    def extract_core_claim_result(
+        self,
+        query: str,
+        on_event: AgentEventCallback | None = None,
+    ) -> CoreClaimResult:
         arena_failure_reason = ""
         try:
-            arena_result = CoreClaimArena(self.llm_client).run(query)
+            arena_result = CoreClaimArena(
+                self.llm_client,
+                allow_heuristic_fallback=not self.strict,
+            ).run(query, on_event=on_event)
+            self.last_core_claim_result = arena_result
             if any(
                 candidate.proposer in PROPOSER_ROLES
                 for candidate in arena_result.candidates
@@ -158,7 +170,11 @@ class LLMClaimPlanner:
             arena_failure_reason = (
                 "Multi-agent arena produced no valid agent candidates; used fallback extraction."
             )
-        except Exception:
+        except Exception as exc:
+            if self.strict:
+                raise CoreClaimArenaError(
+                    "Strict multi-agent execution failed."
+                ) from exc
             arena_failure_reason = (
                 "Multi-agent arena failed; used deterministic fallback extraction."
             )
@@ -205,10 +221,14 @@ class LLMClaimPlanner:
             self.fallback_reason = ""
             return claim
         except ValueError as exc:
+            if self.strict:
+                raise
             self.used_planner = "heuristic"
             self.fallback_reason = f"Invalid LLM core-claim response: {exc}"
             return fallback_claim
         except Exception:
+            if self.strict:
+                raise
             self.used_planner = "heuristic"
             self.fallback_reason = "LLM core-claim extraction failed; using heuristic planner."
             return fallback_claim
@@ -219,11 +239,26 @@ class LLMClaimPlanner:
             return extractor(query)
         return HeuristicCoreClaimEngine().run(self.fallback.extract_core_claim(query))
 
-    def build(self, query: str) -> ClaimPlan:
-        fallback_plan = self.fallback.build(query)
+    def build(
+        self,
+        query: str,
+        on_event: AgentEventCallback | None = None,
+    ) -> ClaimPlan:
+        anchor_claim = ""
+        if self.strict:
+            anchor_claim = self.extract_core_claim_result(
+                query,
+                on_event=on_event,
+            ).selected_claim
+        fallback_plan = self.fallback.build(anchor_claim or query)
         try:
-            content = self.llm_client.chat(_planner_messages(query), temperature=0.1)
+            content = self.llm_client.chat(
+                _planner_messages(query, anchor_claim=anchor_claim),
+                temperature=0.1,
+            )
             payload = _extract_json_object(content)
+            if anchor_claim:
+                payload["normalized_claim"] = anchor_claim
             plan = _payload_to_plan(
                 payload=payload,
                 fallback_plan=fallback_plan,
@@ -234,14 +269,20 @@ class LLMClaimPlanner:
             self.fallback_reason = ""
             return plan
         except PlannerShapeError as exc:
+            if self.strict:
+                raise
             self.used_planner = "heuristic"
             self.fallback_reason = f"Invalid LLM plan shape: {exc}"
             return fallback_plan
         except ValueError as exc:
+            if self.strict:
+                raise
             self.used_planner = "heuristic"
             self.fallback_reason = f"Invalid LLM planner response: {exc}"
             return fallback_plan
         except Exception:
+            if self.strict:
+                raise
             self.used_planner = "heuristic"
             self.fallback_reason = "LLM planner failed; using heuristic planner."
             return fallback_plan
@@ -280,7 +321,13 @@ def _core_claim_messages(query: str) -> list[dict[str, str]]:
     ]
 
 
-def _planner_messages(query: str) -> list[dict[str, str]]:
+def _planner_messages(query: str, *, anchor_claim: str = "") -> list[dict[str, str]]:
+    anchor = (
+        f"\nSelected Core Claim from the six-role arena:\n{anchor_claim}\n"
+        "Preserve this selected claim exactly as normalized_claim.\n"
+        if anchor_claim
+        else ""
+    )
     return [
         {
             "role": "system",
@@ -298,6 +345,7 @@ def _planner_messages(query: str) -> list[dict[str, str]]:
             "content": (
                 "Input direction:\n"
                 f"{query}\n\n"
+                f"{anchor}"
                 "Return this exact JSON shape:\n"
                 "{\n"
                 '  "normalized_claim": "specific, testable research claim",\n'

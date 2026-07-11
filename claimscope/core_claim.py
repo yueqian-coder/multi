@@ -5,6 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from time import perf_counter
+from typing import Callable
 
 from .models import AgentEvent, ClaimCandidate, ClaimCritique, CoreClaimResult
 
@@ -71,6 +72,12 @@ _JUDGE_SCHEMA = (
     '"falsification_test": "test", "unresolved_ambiguities": ["ambiguity"]}'
 )
 
+AgentEventCallback = Callable[[AgentEvent], None]
+
+
+class CoreClaimArenaError(RuntimeError):
+    pass
+
 
 class HeuristicCoreClaimEngine:
     def run(self, direction: str) -> CoreClaimResult:
@@ -105,14 +112,29 @@ class HeuristicCoreClaimEngine:
 
 
 class CoreClaimArena:
-    def __init__(self, llm_client: object, max_workers: int = 3, timeout: float = 60):
+    def __init__(
+        self,
+        llm_client: object,
+        max_workers: int = 3,
+        timeout: float = 60,
+        allow_heuristic_fallback: bool = True,
+    ):
         self.llm_client = llm_client
         self.max_workers = max(1, min(3, int(max_workers)))
         self.timeout = timeout
+        self.allow_heuristic_fallback = allow_heuristic_fallback
 
-    def run(self, direction: str) -> CoreClaimResult:
-        candidates, proposer_events = self._run_proposers(direction)
+    def run(
+        self,
+        direction: str,
+        on_event: AgentEventCallback | None = None,
+    ) -> CoreClaimResult:
+        candidates, proposer_events = self._run_proposers(direction, on_event)
         if not candidates:
+            if not self.allow_heuristic_fallback:
+                raise CoreClaimArenaError(
+                    "Multi-agent arena produced no valid proposer candidates."
+                )
             fallback = HeuristicCoreClaimEngine().run(direction)
             return replace(
                 fallback,
@@ -120,17 +142,40 @@ class CoreClaimArena:
                 mode="multi_agent",
                 degraded=True,
             )
+        if not self.allow_heuristic_fallback and (
+            len(candidates) != len(PROPOSER_ROLES)
+            or any(event.status != "complete" for event in proposer_events)
+        ):
+            raise CoreClaimArenaError(
+                "Strict multi-agent execution requires every proposer artifact."
+            )
 
         critiques: list[ClaimCritique] = []
         critic_events: list[AgentEvent] = []
         for role, rubric in CRITIC_ROLES.items():
+            _notify(on_event, _running_event(role))
             critique, event = self._run_critic(direction, role, rubric, candidates)
             critiques.extend(critique)
             critic_events.append(event)
+            _notify(on_event, event)
+            if not self.allow_heuristic_fallback and (
+                event.status != "complete" or len(critique) != len(candidates)
+            ):
+                raise CoreClaimArenaError(
+                    "Strict multi-agent execution requires every critic artifact."
+                )
 
+        _notify(on_event, _running_event("judge"))
         selected_candidate, final_claim, ambiguities, judge_event, judge_degraded = (
             self._run_judge(direction, candidates, critiques)
         )
+        _notify(on_event, judge_event)
+        if not self.allow_heuristic_fallback and (
+            judge_degraded or judge_event.status != "complete"
+        ):
+            raise CoreClaimArenaError(
+                "Strict multi-agent execution requires a valid judge artifact."
+            )
         events = proposer_events + critic_events + [judge_event]
         degraded = judge_degraded or any(
             event.status == "failed" for event in proposer_events + critic_events
@@ -148,10 +193,14 @@ class CoreClaimArena:
         )
 
     def _run_proposers(
-        self, direction: str
+        self,
+        direction: str,
+        on_event: AgentEventCallback | None = None,
     ) -> tuple[list[ClaimCandidate], list[AgentEvent]]:
         candidates_by_role: dict[str, ClaimCandidate] = {}
         events_by_role: dict[str, AgentEvent] = {}
+        for role in PROPOSER_ROLES:
+            _notify(on_event, _running_event(role))
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
                 executor.submit(self._run_proposer, direction, role, rubric): role
@@ -173,6 +222,7 @@ class CoreClaimArena:
                 if candidate is not None:
                     candidates_by_role[role] = candidate
                 events_by_role[role] = event
+                _notify(on_event, event)
         return (
             [
                 candidates_by_role[role]
@@ -261,15 +311,18 @@ class CoreClaimArena:
                 timeout=self.timeout,
             )
             payload = _extract_json_object(content)
-            selected = _candidate_by_id(
-                candidates, _coerce_text(payload.get("selected_candidate_id"))
-            )
-            final_claim = _coerce_text(payload.get("final_claim")) or selected.claim
+            candidate_id = _coerce_text(payload.get("selected_candidate_id"))
+            final_claim = _coerce_text(payload.get("final_claim"))
             falsification_test = _coerce_text(payload.get("falsification_test"))
+            if not candidate_id or not final_claim or not falsification_test:
+                raise ValueError("judge response missing required fields")
+            if not isinstance(payload.get("unresolved_ambiguities"), list):
+                raise ValueError("judge unresolved_ambiguities must be a list")
+            selected = _candidate_by_id(candidates, candidate_id)
             selected = replace(
                 selected,
                 claim=final_claim,
-                falsification_test=falsification_test or selected.falsification_test,
+                falsification_test=falsification_test,
             )
             ambiguities = _coerce_string_list(payload.get("unresolved_ambiguities"))
             return (
@@ -547,19 +600,29 @@ def _payload_to_candidate(payload: dict, proposer: str) -> ClaimCandidate:
     claim = _coerce_text(payload.get("claim"))
     if not claim:
         raise ValueError("missing claim")
+    required_text = {
+        "method_or_mechanism": _coerce_text(payload.get("method_or_mechanism")),
+        "target_or_task": _coerce_text(payload.get("target_or_task")),
+        "expected_effect": _coerce_text(payload.get("expected_effect")),
+        "falsification_test": _coerce_text(payload.get("falsification_test")),
+    }
+    missing = [name for name, value in required_text.items() if not value]
+    if missing:
+        raise ValueError("candidate response missing required fields")
+    conditions = _coerce_string_list(payload.get("conditions"))
+    if not conditions:
+        raise ValueError("candidate conditions must be non-empty")
+    if not isinstance(payload.get("missing_information"), list):
+        raise ValueError("candidate missing_information must be a list")
+    if not isinstance(payload.get("confidence"), (int, float)):
+        raise ValueError("candidate confidence must be numeric")
     return ClaimCandidate(
         claim=claim,
-        method_or_mechanism=_coerce_text(payload.get("method_or_mechanism")),
-        target_or_task=_coerce_text(payload.get("target_or_task")),
-        expected_effect=_coerce_text(payload.get("expected_effect")),
-        conditions=_coerce_string_list(payload.get("conditions")),
-        falsification_test=(
-            _coerce_text(payload.get("falsification_test"))
-            or (
-                "Compare the stated outcome against a baseline under the stated "
-                "condition."
-            )
-        ),
+        method_or_mechanism=required_text["method_or_mechanism"],
+        target_or_task=required_text["target_or_task"],
+        expected_effect=required_text["expected_effect"],
+        conditions=conditions,
+        falsification_test=required_text["falsification_test"],
         missing_information=_coerce_string_list(payload.get("missing_information")),
         confidence=_coerce_float(payload.get("confidence"), default=0.0),
         proposer=proposer,
@@ -680,6 +743,34 @@ def _event(
         artifacts=artifacts,
         scores=scores or {},
     )
+
+
+def _running_event(role: str) -> AgentEvent:
+    if role in PROPOSER_ROLES:
+        summary = "Generating one structured public claim candidate."
+    elif role in CRITIC_ROLES:
+        summary = "Reviewing public candidates against the assigned rubric."
+    else:
+        summary = "Comparing public candidates and critiques for final selection."
+    return AgentEvent(
+        stage="core_claim",
+        role=role,
+        status="running",
+        public_summary=summary,
+        artifacts={},
+    )
+
+
+def _notify(
+    callback: AgentEventCallback | None,
+    event: AgentEvent,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(event)
+    except Exception:
+        return
 
 
 def _coerce_string_list(value: object) -> list[str]:

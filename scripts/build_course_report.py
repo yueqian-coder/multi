@@ -29,7 +29,7 @@ def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
 
 
 def rounded_box(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], title: str, subtitle: str, fill: str) -> None:
-    draw.rounded_rectangle(box, radius=12, fill=fill, outline="#C7D3DA", width=2)
+    draw.rectangle(box, fill=fill, outline="#AEB9BE", width=2)
     x1, y1, x2, y2 = box
     draw.text(((x1 + x2) / 2, y1 + 28), title, font=font(25, True), fill="#17212B", anchor="mm")
     draw.multiline_text(((x1 + x2) / 2, y1 + 67), subtitle, font=font(16), fill="#53636D", anchor="mm", align="center", spacing=4)
@@ -43,10 +43,10 @@ def arrow(draw: ImageDraw.ImageDraw, start: tuple[int, int], end: tuple[int, int
 
 def build_diagrams() -> None:
     ASSETS.mkdir(parents=True, exist_ok=True)
-    canvas = Image.new("RGB", (1800, 470), "#F7FAFB")
+    canvas = Image.new("RGB", (1800, 470), "#FFFFFF")
     draw = ImageDraw.Draw(canvas)
     titles = ["Research\nDirection", "Core Claim", "Variants &\nBoundaries", "Hidden\nAssumptions", "Evidence\nQueries", "Evidence\nCards", "Idea\nOpportunities"]
-    colors = ["#EAF3F5", "#DDEFF1", "#F1EEE4", "#EEF1E7", "#E8EEF4", "#F3EBE7", "#E5F1E9"]
+    colors = ["#FFFFFF", "#E8EFF2", "#FFFFFF", "#F2F4F5", "#FFFFFF", "#F2F4F5", "#E8EFF2"]
     width, gap, y1, y2 = 210, 38, 145, 325
     for index, (title, color) in enumerate(zip(titles, colors)):
         x1 = 35 + index * (width + gap)
@@ -56,7 +56,7 @@ def build_diagrams() -> None:
     draw.text((50, 52), "ClaimScope: assumption-centric pre-ideation workflow", font=font(34, True), fill="#1F5A7A")
     canvas.save(ASSETS / "report-workflow.png", quality=95)
 
-    canvas = Image.new("RGB", (1600, 920), "#F7FAFB")
+    canvas = Image.new("RGB", (1600, 920), "#FFFFFF")
     draw = ImageDraw.Draw(canvas)
     draw.text((60, 55), "Core Claim Arena: public artifacts, adversarial review", font=font(34, True), fill="#1F5A7A")
     rounded_box(draw, (650, 130, 950, 260), "Research Direction", "fuzzy user input", "#EAF3F5")
@@ -64,16 +64,16 @@ def build_diagrams() -> None:
     proposer_titles = ["Operationalizer", "Mechanism Analyst", "Skeptical Empiricist"]
     proposer_subtitles = ["variables, baseline, metric", "mechanism, target, boundary", "narrow falsifiable claim"]
     for box, title, subtitle in zip(proposer_boxes, proposer_titles, proposer_subtitles):
-        rounded_box(draw, box, title, subtitle, "#DDEFF1")
+        rounded_box(draw, box, title, subtitle, "#EDF2F4")
         draw.line(((800, 260), ((box[0] + box[2]) // 2, box[1])), fill="#577683", width=4)
     critic_boxes = [(260, 610, 660, 760), (940, 610, 1340, 760)]
     for box, title, subtitle in zip(critic_boxes, ["Falsifiability Critic", "Scope Critic"], ["observable adverse test", "bounded population and task"]):
-        rounded_box(draw, box, title, subtitle, "#F1EEE4")
+        rounded_box(draw, box, title, subtitle, "#F5F5F3")
     for pbox in proposer_boxes:
         center = ((pbox[0] + pbox[2]) // 2, pbox[3])
         for cbox in critic_boxes:
             draw.line((center, ((cbox[0] + cbox[2]) // 2, cbox[1])), fill="#B2C0C7", width=2)
-    rounded_box(draw, (650, 790, 950, 900), "Judge", "selection + open slots", "#E5F1E9")
+    rounded_box(draw, (650, 790, 950, 900), "Judge", "selection + open slots", "#E8EFF2")
     for cbox in critic_boxes:
         draw.line((((cbox[0] + cbox[2]) // 2, cbox[3]), (800, 790)), fill="#577683", width=4)
     canvas.save(ASSETS / "report-arena.png", quality=95)
