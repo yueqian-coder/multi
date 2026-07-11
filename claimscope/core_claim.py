@@ -503,8 +503,9 @@ def _proposer_messages(direction: str, role: str, rubric: str) -> list[dict[str,
         {
             "role": "system",
             "content": (
-                f"You are the {role} proposer in ClaimScope's public core-claim arena. "
-                f"{rubric} Return JSON only. Do not include chain-of-thought, private "
+                f"You are the {role} proposer in ClaimScope's public core-claim review. "
+                f"{rubric} Use the same language as the research direction for every "
+                "human-readable JSON value. Return JSON only. Do not include chain-of-thought, private "
                 "reasoning, credentials, markdown, citations, or prose."
             ),
         },
@@ -529,9 +530,10 @@ def _critic_messages(
         {
             "role": "system",
             "content": (
-                f"You are the {role} critic in ClaimScope's public core-claim arena. "
+                f"You are the {role} critic in ClaimScope's public core-claim review. "
                 f"{rubric} Score each candidate from 0 to 5 on the six public rubric "
-                "keys. Return JSON only. Do not include chain-of-thought, private "
+                "keys. Use the same language as the research direction for every "
+                "human-readable JSON value. Return JSON only. Do not include chain-of-thought, private "
                 "reasoning, credentials, markdown, citations, or prose."
             ),
         },
@@ -540,7 +542,7 @@ def _critic_messages(
             "content": (
                 f"Direction:\n{direction}\n\n"
                 "Candidates:\n"
-                f"{json.dumps(_candidate_payloads(candidates), sort_keys=True)}\n\n"
+                f"{json.dumps(_candidate_payloads(candidates), sort_keys=True, ensure_ascii=False)}\n\n"
                 "Return exactly this JSON schema:\n"
                 f"{_CRITIQUE_SCHEMA}"
             ),
@@ -557,9 +559,10 @@ def _judge_messages(
         {
             "role": "system",
             "content": (
-                "You are the judge in ClaimScope's public core-claim arena. Select the "
+                "You are the judge in ClaimScope's public core-claim review. Select the "
                 "best candidate using only the structured public candidates and public "
-                "critiques. Return JSON only. Do not include chain-of-thought, private "
+                "critiques. Use the same language as the research direction for every "
+                "human-readable JSON value. Return JSON only. Do not include chain-of-thought, private "
                 "reasoning, credentials, markdown, citations, or prose."
             ),
         },
@@ -568,9 +571,9 @@ def _judge_messages(
             "content": (
                 f"Direction:\n{direction}\n\n"
                 "Candidates:\n"
-                f"{json.dumps(_candidate_payloads(candidates), sort_keys=True)}\n\n"
+                f"{json.dumps(_candidate_payloads(candidates), sort_keys=True, ensure_ascii=False)}\n\n"
                 "Critiques:\n"
-                f"{json.dumps([item.to_dict() for item in critiques], sort_keys=True)}\n\n"
+                f"{json.dumps([item.to_dict() for item in critiques], sort_keys=True, ensure_ascii=False)}\n\n"
                 "Return exactly this JSON schema:\n"
                 f"{_JUDGE_SCHEMA}"
             ),

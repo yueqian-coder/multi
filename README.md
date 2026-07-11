@@ -9,7 +9,7 @@ ClaimScope turns a fuzzy research direction into a falsifiable claim, an assumpt
 
 > Open-source pre-ideation research tooling: adversarial by design, evidence-first, and explicit about uncertainty.
 
-![ClaimScope strict six-agent result](docs/assets/claimscope-v05-result.png)
+![ClaimScope claim review workbench](docs/assets/claimscope-v06-workbench.png)
 
 ## 30-second Quick Start
 
@@ -19,11 +19,11 @@ python -m claimscope.cli "RAG can reliably reduce hallucination in LLM-generated
 streamlit run app.py
 ```
 
-The CLI command is a deterministic offline baseline. The Web app is the final strict-agent surface: configure an OpenAI-compatible Provider in the session-only settings, approve remote processing, and run all six roles. It never substitutes a heuristic result when a Web agent stage fails.
+The CLI command is a deterministic offline baseline. The Web app is the strict-agent surface: choose the GPT, Claude, or custom provider profile, approve remote processing, and run all six roles. It never substitutes a heuristic result when a Web agent stage fails.
 
-## Core Claim Arena
+## Core Claim Review
 
-Core Claim Arena runs three proposers, two adversarial critics, and one judge. During execution the bilingual UI streams `Proposer -> Critic -> Judge` status. Afterward, each role can be expanded to inspect its public input summary, candidates, six-axis scores, reason codes, revisions, and final selection. These are structured public artifacts, not private chain-of-thought. The score measures claim completeness, not epistemic confidence.
+Core Claim Review runs three proposers, two adversarial critics, and one judge. During execution the bilingual UI streams `Proposer -> Critic -> Judge` status. Afterward, the workbench exposes a claim anatomy, candidate comparison, six-axis reviews, revision notes, and public role outputs. These are structured public artifacts, not private chain-of-thought. The score measures claim completeness, not epistemic confidence.
 
 ## Full Assumption / Evidence Workflow
 
@@ -51,7 +51,7 @@ python -m pip install -e ".[mcp]"
 python -m claimscope.mcp_server
 ```
 
-The five tools are `extract_core_claim`, `analyze_research_direction`, `build_evidence_queries`, `evaluate_claim_benchmark`, and `get_demo_report`. Optional LLM configuration uses placeholders only: `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `MODEL_NAME`. Keys are read from environment variables or an in-memory UI field and are never written to reports.
+The five tools are `extract_core_claim`, `analyze_research_direction`, `build_evidence_queries`, `evaluate_claim_benchmark`, and `get_demo_report`. Optional LLM configuration uses placeholders only: `OPENAI_BASE_URL`, `CLAIMSCOPE_GPT_API_KEY`, `CLAIMSCOPE_CLAUDE_API_KEY`, and provider-specific model variables. Keys are read from environment variables or an in-memory UI field and are never written to reports.
 
 The UI requires explicit consent before sending research directions to a configured LLM provider or generated search queries to public academic APIs. Full Discovery in the Web app always uses live academic retrieval; there is no synthetic Web result path. CLI and MCP users opt in by configuring environment variables or setting `online=true`; do not submit confidential research text to providers you do not trust.
 
@@ -77,7 +77,7 @@ Minimal MCP client configuration after installation:
 
 ```mermaid
 flowchart LR
-    D["Research direction"] --> C["Core Claim Arena"]
+    D["Research direction"] --> C["Core Claim Review"]
     C --> V["Variants and boundaries"]
     V --> A["Hidden assumptions"]
     A --> Q["Adversarial evidence queries"]

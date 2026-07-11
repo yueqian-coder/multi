@@ -15,12 +15,12 @@ AGENT_LABELS = {
     "heuristic_core_claim_engine": "Baseline extractor",
 }
 AGENT_LABELS_ZH = {
-    "operationalizer": "操作化研究员",
-    "mechanism_analyst": "机制分析员",
-    "skeptical_empiricist": "怀疑主义实证员",
-    "falsifiability_critic": "可证伪性评审",
-    "scope_critic": "范围边界评审",
-    "judge": "裁决者",
+    "operationalizer": "变量操作化",
+    "mechanism_analyst": "机制分析",
+    "skeptical_empiricist": "反证分析",
+    "falsifiability_critic": "可证伪性审查",
+    "scope_critic": "边界条件审查",
+    "judge": "综合裁决",
     "heuristic_core_claim_engine": "基线抽取器",
 }
 STATUS_LABELS_ZH = {

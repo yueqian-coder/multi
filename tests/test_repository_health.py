@@ -24,7 +24,7 @@ def test_open_source_release_surface_is_present_and_truthful():
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for phrase in (
-        "Core Claim Arena",
+        "Core Claim Review",
         "ClaimBench",
         "MCP",
         "30-second",
@@ -48,7 +48,7 @@ def test_release_metadata_targets_the_real_repository_and_real_ui():
     assert repository_url in citation
     assert repository_url in pyproject
     assert "github.com/claimscope/claimscope" not in readme + citation
-    assert "docs/assets/claimscope-v05-result.png" in readme
+    assert "docs/assets/claimscope-v06-workbench.png" in readme
     assert 'license = "MIT"' in pyproject
     assert "License :: OSI Approved" not in pyproject
 

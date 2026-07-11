@@ -4,9 +4,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_ui_has_agent_arena_and_no_internal_thought_copy():
+def test_ui_has_claim_review_and_no_internal_thought_copy():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert "Core Claim Arena" in source
+    assert "Claim Review" in source
     assert "Agent activity" in source
     assert "chain of thought" not in source.lower()
 
@@ -19,9 +19,10 @@ def test_ui_uses_session_state_for_results():
 
 def test_ui_contract_has_compact_modes_and_secret_safe_provider_copy():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert "Full Discovery" in source
+    assert "Evidence Discovery" in source
     assert "Download feedback JSONL" in source
-    assert 'st.session_state.get("provider_key"' in source
+    assert 'st.session_state.get("gpt_provider_key"' in source
+    assert 'st.session_state.get("claude_provider_key"' in source
     assert 'st.session_state.get("provider_allow_remote")' in source
     assert "st.sidebar" not in source
     assert "linear-gradient" not in source
@@ -29,7 +30,7 @@ def test_ui_contract_has_compact_modes_and_secret_safe_provider_copy():
 
 def test_ui_keeps_mode_selector_below_streamlit_header():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
-    assert "padding:4.5rem 1.1rem 2.5rem" in source
+    assert "padding:4.5rem 1.25rem 2.5rem" in source
     assert "padding:4rem 0.65rem 2rem" in source
 
 
@@ -37,7 +38,7 @@ def test_ui_composes_header_and_research_controls_as_real_containers():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
     assert "def render_header(language: str)" in source
     assert "mode, language = render_header(language)" in source
-    assert "def render_research_controls(mode: str, language: str)" in source
+    assert "def render_research_controls(mode: str, language: str, *, compact: bool = False)" in source
     assert "\ufffd" not in source
 
 
@@ -183,8 +184,8 @@ def test_web_ui_is_bilingual_and_uses_strict_real_agents():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
 
     assert "中文" in source
-    assert "Core Claim Arena" in source
-    assert "核心主张竞技场" in source
+    assert "Claim Review" in source
+    assert "核心主张审议" in source
     assert 'mode="llm_strict"' in source
     assert "strict_agent=True" in source
     assert "demo / heuristic" not in source
@@ -195,7 +196,7 @@ def test_web_ui_streams_public_agent_progress_and_exposes_artifacts():
 
     assert "on_event=on_agent_event" in source
     assert "Public execution trace" in source
-    assert "公开执行轨迹" in source
+    assert "执行记录" in source
     assert "def render_agent_inspector" in source
     assert "rubric_scores" in source
     assert "reason_codes" in source
@@ -236,3 +237,43 @@ def test_results_are_never_reused_for_a_different_direction():
     result = {"direction": "old direction", "selected_claim": "old claim"}
     assert result_for_direction(result, "new direction", "direction") is None
     assert result_for_direction(result, "old direction", "direction") == result
+
+
+def test_result_snapshot_is_only_written_when_explicitly_configured(tmp_path, monkeypatch):
+    from app import save_result_snapshot
+
+    monkeypatch.delenv("CLAIMSCOPE_RESULT_SNAPSHOT", raising=False)
+    save_result_snapshot({"direction": "not persisted"})
+    assert list(tmp_path.iterdir()) == []
+
+    snapshot = tmp_path / "result.json"
+    monkeypatch.setenv("CLAIMSCOPE_RESULT_SNAPSHOT", str(snapshot))
+    save_result_snapshot({"direction": "中文方向"})
+    assert '"direction": "中文方向"' in snapshot.read_text(encoding="utf-8")
+
+
+def test_chinese_ui_uses_research_review_terms_instead_of_arena_copy():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    for label in [
+        "核心主张审议",
+        "证据发现",
+        "结论概览",
+        "候选与审查",
+        "角色输出",
+        "问题标签",
+        "综合裁决",
+    ]:
+        assert label in source
+    assert "核心主张竞技场" not in source
+    assert "怀疑主义实证员" not in source
+
+
+def test_ui_supports_explicit_gpt_claude_and_custom_profiles():
+    source = (ROOT / "app.py").read_text(encoding="utf-8")
+
+    assert '"gpt", "claude", "custom"' in source
+    assert "CLAIMSCOPE_GPT_API_KEY" in source
+    assert "CLAIMSCOPE_CLAUDE_API_KEY" in source
+    assert "gpt-5.4-mini" in source
+    assert "claude-sonnet-4-5" in source
