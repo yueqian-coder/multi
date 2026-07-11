@@ -42,13 +42,15 @@ class OpenAICompatibleClient:
         timeout: float | None = None,
     ) -> str:
         endpoint = self.base_url.rstrip("/") + "/chat/completions"
-        payload = json.dumps(
-            {
-                "model": self.model,
-                "messages": messages,
-                "temperature": temperature,
-            }
-        ).encode("utf-8")
+        request_payload = {
+            "model": self.model,
+            "messages": messages,
+        }
+        # GPT-5 reasoning endpoints commonly reject non-default sampling controls.
+        # Reduce request-shape failures while preserving temperature for chat models.
+        if not self.model.strip().lower().startswith("gpt-5"):
+            request_payload["temperature"] = temperature
+        payload = json.dumps(request_payload).encode("utf-8")
         request = urllib.request.Request(
             endpoint,
             data=payload,

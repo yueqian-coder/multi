@@ -13,4 +13,11 @@ dist/
 !.env.example
 *.pdf
 outputs/
+*.mp4
+*.webm
+*.wav
+deliverables/*
+!deliverables/ClaimScope-course-report.docx
+!deliverables/ClaimScope-course-report.pdf
+!deliverables/ClaimScope-demo.mp4
 data/cache/

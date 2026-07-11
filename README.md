@@ -1,5 +1,10 @@
 # ClaimScope
 
+[![CI](https://github.com/yueqian-coder/multi/actions/workflows/ci.yml/badge.svg)](https://github.com/yueqian-coder/multi/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2f855a.svg)](LICENSE)
+[![MCP tools](https://img.shields.io/badge/MCP-5_tools-111827.svg)](docs/architecture.md)
+
 ClaimScope turns a fuzzy research direction into a falsifiable claim, an assumption ledger, adversarial evidence queries, and bounded experiment opportunities before you commit to an idea.
 
 > Open-source pre-ideation research tooling: deterministic by default, evidence-first, and explicit about uncertainty.
@@ -75,6 +80,16 @@ flowchart LR
 ```
 
 `claimscope.models` defines typed artifacts. `core_claim` and `planner` create claims; `pipeline` coordinates the assumption/evidence workflow; `retrievers` provide offline fixtures or optional public sources; `service` provides JSON-compatible boundaries; `cli`, Streamlit, and `mcp_server` are transports. Public trace events contain role, status, duration, artifacts, and scores, not private reasoning.
+
+Detailed diagrams, module contracts, and failure behavior are documented in [System Architecture](docs/architecture.md). The course-oriented experiment record is available in [Experiment Report](docs/course-report.md), with a reproducible [60-second demo script](docs/demo-script.md).
+
+## Review Artifacts
+
+- [Editable course report](deliverables/ClaimScope-course-report.docx)
+- [Rendered course report](deliverables/ClaimScope-course-report.pdf)
+- [58-second narrated demo](deliverables/ClaimScope-demo.mp4)
+
+The report keeps name and student-number placeholders so the repository does not publish personal information. Replace them and rename both submission files before sending the assignment.
 
 ## Limitations
 

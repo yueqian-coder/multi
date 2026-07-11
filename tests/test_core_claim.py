@@ -587,6 +587,60 @@ def test_llm_client_retries_transient_http_error_with_timeout(monkeypatch):
     assert [timeout for _, timeout in calls] == [7, 7]
 
 
+def test_llm_client_omits_temperature_for_gpt5_reasoning_models(monkeypatch):
+    module = importlib.import_module("claimscope.llm")
+    payloads = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    def fake_urlopen(request, timeout):
+        payloads.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    client = module.OpenAICompatibleClient(
+        api_key="test-secret", base_url="https://llm.example/v1", model="gpt-5.4-mini"
+    )
+
+    assert client.chat([{"role": "user", "content": "hello"}], temperature=0.1) == "ok"
+    assert "temperature" not in payloads[0]
+
+
+def test_llm_client_keeps_temperature_for_chat_models(monkeypatch):
+    module = importlib.import_module("claimscope.llm")
+    payloads = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    def fake_urlopen(request, timeout):
+        payloads.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    client = module.OpenAICompatibleClient(
+        api_key="test-secret", base_url="https://llm.example/v1", model="gpt-4o-mini"
+    )
+
+    assert client.chat([{"role": "user", "content": "hello"}], temperature=0.1) == "ok"
+    assert payloads[0]["temperature"] == 0.1
+
+
 def test_llm_client_exhausted_retry_error_is_sanitized(monkeypatch):
     module = importlib.import_module("claimscope.llm")
     calls = []
