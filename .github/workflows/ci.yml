@@ -51,6 +51,26 @@ jobs:
                           "extract_core_claim",
                           "get_demo_report",
                       ]
+                      calls = {
+                          "extract_core_claim": {
+                              "direction": "RAG reduces unsupported answers versus a baseline",
+                              "mode": "heuristic",
+                          },
+                          "analyze_research_direction": {
+                              "direction": "RAG reduces unsupported answers",
+                              "online": False,
+                              "limit": 3,
+                          },
+                          "build_evidence_queries": {
+                              "direction": "RAG reduces unsupported answers",
+                              "mode": "heuristic",
+                          },
+                          "evaluate_claim_benchmark": {},
+                          "get_demo_report": {},
+                      }
+                      for name, arguments in calls.items():
+                          result = await session.call_tool(name, arguments)
+                          assert not result.isError, name
 
           asyncio.run(main())
           PY

@@ -133,9 +133,15 @@ class ClaimScopePipeline:
             "complete",
             "Captured the public research direction.",
             {"query_characters": len(query)},
+            on_event=on_event,
         )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "core_claim",
+            "claim_planner",
+            "Selecting and normalizing a testable core claim.",
+        )
         try:
             if isinstance(self.planner, LLMClaimPlanner):
                 plan = self.planner.build(query, on_event=on_event)
@@ -158,6 +164,7 @@ class ClaimScopePipeline:
                 "degraded" if planner_fallback else "complete",
                 "Selected a normalized, testable core claim.",
                 {"claim_present": bool(claim)},
+                on_event=on_event,
             )
         except Exception:
             if not self.allow_planner_fallback:
@@ -176,9 +183,15 @@ class ClaimScopePipeline:
                 "failed",
                 "Planner failed; recovered with a conservative heuristic plan.",
                 {"claim_present": bool(claim), "recovered": True},
+                on_event=on_event,
             )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "claim_boundaries",
+            "claim_planner",
+            "Preparing claim variants and boundary-condition probes.",
+        )
         try:
             planned_variants = list(plan.claim_variants)
             boundary_status = "complete" if planned_variants else "skipped"
@@ -196,9 +209,15 @@ class ClaimScopePipeline:
             boundary_status,
             "Prepared claim variants and boundary-condition probes.",
             {"variant_count": len(planned_variants)},
+            on_event=on_event,
         )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "hidden_assumptions",
+            "claim_planner",
+            "Identifying hidden assumptions for evidence checks.",
+        )
         try:
             planned_assumptions = list(plan.assumptions)
             assumption_status = "complete" if planned_assumptions else "skipped"
@@ -216,9 +235,15 @@ class ClaimScopePipeline:
             assumption_status,
             "Identified hidden assumptions to test against retrieved evidence.",
             {"assumption_count": len(planned_assumptions)},
+            on_event=on_event,
         )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "evidence_queries",
+            "query_builder",
+            "Generating adversarial evidence queries.",
+        )
         try:
             retrieval_queries = [claim]
             for item in planned_assumptions:
@@ -238,9 +263,15 @@ class ClaimScopePipeline:
             evidence_query_status,
             "Generated adversarial evidence queries.",
             {"query_count": len([item for item in retrieval_queries if item])},
+            on_event=on_event,
         )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "evidence_retrieval",
+            "paper_retriever",
+            "Searching external scholarly indexes and deduplicating papers.",
+        )
         retrieval_failed = False
         try:
             papers, retrieval_warnings, retrieval_failed = _targeted_search(
@@ -266,13 +297,19 @@ class ClaimScopePipeline:
             retrieval_status,
             "Retrieved and deduplicated candidate papers.",
             {"paper_count": len(papers)},
+            on_event=on_event,
         )
         if self.require_retrieval_evidence and not papers:
             raise EvidenceRetrievalRequired(
                 "Strict discovery requires at least one retrieved paper."
             )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "evidence_adjudication",
+            "evidence_mapper",
+            "Mapping abstract evidence to assumptions conservatively.",
+        )
         adjudication_failed = False
         try:
             variants = _build_claim_variants(planned_variants, claim, papers)
@@ -315,9 +352,15 @@ class ClaimScopePipeline:
             adjudication_status,
             "Mapped abstract evidence to assumptions with conservative stance labels.",
             {"direct_evidence_count": direct_evidence_count},
+            on_event=on_event,
         )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "opportunity_synthesis",
+            "opportunity_builder",
+            "Synthesizing opportunity slots from gaps and negative evidence.",
+        )
         opportunity_failed = False
         try:
             opportunities = _build_idea_opportunities(assumptions, negative_evidence)
@@ -341,9 +384,15 @@ class ClaimScopePipeline:
             opportunity_status,
             "Synthesized opportunity slots from gaps and negative evidence.",
             {"opportunity_count": len(opportunities)},
+            on_event=on_event,
         )
 
-        started = time.perf_counter()
+        started = _begin_event(
+            on_event,
+            "quality_review",
+            "quality_reviewer",
+            "Reviewing retrieval coverage and evidence limitations.",
+        )
         quality_failed = False
         try:
             warnings.extend(
@@ -373,6 +422,7 @@ class ClaimScopePipeline:
             quality_status,
             "Reviewed retrieval coverage, evidence limitations, and fallback signals.",
             {"warning_count": len(warnings)},
+            on_event=on_event,
         )
         return AnalysisReport(
             query=query,
@@ -763,17 +813,51 @@ def _emit_event(
     status: str,
     public_summary: str,
     artifacts: dict[str, object] | None = None,
+    *,
+    on_event: AgentEventCallback | None = None,
 ) -> None:
-    events.append(
+    event = AgentEvent(
+        stage=stage,
+        role=role,
+        status=status,
+        public_summary=public_summary,
+        duration_ms=max(0, round((time.perf_counter() - started) * 1000)),
+        artifacts=artifacts or {},
+    )
+    events.append(event)
+    _notify_pipeline_event(on_event, event)
+
+
+def _begin_event(
+    on_event: AgentEventCallback | None,
+    stage: str,
+    role: str,
+    public_summary: str,
+) -> float:
+    _notify_pipeline_event(
+        on_event,
         AgentEvent(
             stage=stage,
             role=role,
-            status=status,
+            status="running",
             public_summary=public_summary,
-            duration_ms=max(0, round((time.perf_counter() - started) * 1000)),
-            artifacts=artifacts or {},
-        )
+            duration_ms=0,
+            artifacts={},
+        ),
     )
+    return time.perf_counter()
+
+
+def _notify_pipeline_event(
+    on_event: AgentEventCallback | None,
+    event: AgentEvent,
+) -> None:
+    if on_event is None:
+        return
+    try:
+        on_event(event)
+    except Exception:
+        return
 
 
 def _relevance_score(claim: str, paper: Paper) -> float:

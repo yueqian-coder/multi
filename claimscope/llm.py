@@ -35,14 +35,40 @@ class OpenAICompatibleClient:
 
     @classmethod
     def from_env(cls) -> "OpenAICompatibleClient | None":
-        api_key = os.getenv("OPENAI_API_KEY")
+        provider = os.getenv("CLAIMSCOPE_PROVIDER", "").strip().lower()
+        if not provider:
+            if os.getenv("CLAIMSCOPE_CLAUDE_API_KEY"):
+                provider = "claude"
+            elif os.getenv("CLAIMSCOPE_GPT_API_KEY"):
+                provider = "gpt"
+        if provider == "claude":
+            api_key = os.getenv("CLAIMSCOPE_CLAUDE_API_KEY") or os.getenv(
+                "OPENAI_API_KEY"
+            )
+            model = (
+                os.getenv("CLAIMSCOPE_CLAUDE_MODEL")
+                or os.getenv("MODEL_NAME")
+                or "claude-sonnet-4-5"
+            )
+        elif provider == "gpt":
+            api_key = os.getenv("CLAIMSCOPE_GPT_API_KEY") or os.getenv(
+                "OPENAI_API_KEY"
+            )
+            model = (
+                os.getenv("CLAIMSCOPE_GPT_MODEL")
+                or os.getenv("MODEL_NAME")
+                or "gpt-5.4-mini"
+            )
+        else:
+            api_key = os.getenv("OPENAI_API_KEY")
+            model = os.getenv("MODEL_NAME", "gpt-4o-mini")
         base_url = os.getenv("OPENAI_BASE_URL")
         if not api_key or not base_url:
             return None
         return cls(
             api_key=api_key,
             base_url=base_url,
-            model=os.getenv("MODEL_NAME", "gpt-4o-mini"),
+            model=model,
         )
 
     def chat(

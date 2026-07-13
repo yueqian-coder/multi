@@ -9,7 +9,7 @@ ClaimScope turns a fuzzy research direction into a falsifiable claim, an assumpt
 
 > Open-source pre-ideation research tooling: adversarial by design, evidence-first, and explicit about uncertainty.
 
-![ClaimScope claim review workbench](docs/assets/claimscope-v06-workbench.png)
+![ClaimScope claim review workbench](docs/assets/claimscope-v08-workbench.png)
 
 ## 30-second Quick Start
 
@@ -36,13 +36,15 @@ Core Claim Review runs three proposers, two adversarial critics, and one judge. 
 
 ## ClaimBench
 
-ClaimBench is a deterministic, no-network smoke benchmark with 27 cross-domain cases. It scores slot coverage, specificity, comparison language, measurable outcomes, falsification quality, and overclaim penalties.
+ClaimBench is a deterministic, no-network smoke benchmark with 27 cross-domain cases. It scores slot coverage, specificity, comparison language, measurable outcomes, falsification quality, and overclaim penalties. Nine stratified cases also carry manual method, target, and condition annotations for parser-boundary checks.
 
 ```bash
 python -m claimscope.cli benchmark --engine heuristic
 ```
 
-The current heuristic baseline scores `70.09/100` across 27 internal smoke cases. This is a regression signal, not a claim of scientific validity or general agent quality.
+The current heuristic baseline scores `81.15/100`; all 27 cases clear the structural threshold. On the nine manually annotated normalized claims, expected slot concepts are found in the correct fields in `100%` of checks and target/comparator contamination is `0%`.
+
+These are regression signals, not fuzzy-direction or scientific accuracy. The current set contains already normalized claims: exact input-copy rate and input-concept leakage are both `100%`. The JSON report publishes those caveats, per-domain scores, component means, and the lowest-scoring cases.
 
 ## MCP
 
@@ -51,7 +53,7 @@ python -m pip install -e ".[mcp]"
 python -m claimscope.mcp_server
 ```
 
-The five tools are `extract_core_claim`, `analyze_research_direction`, `build_evidence_queries`, `evaluate_claim_benchmark`, and `get_demo_report`. Optional LLM configuration uses placeholders only: `OPENAI_BASE_URL`, `CLAIMSCOPE_GPT_API_KEY`, `CLAIMSCOPE_CLAUDE_API_KEY`, and provider-specific model variables. Keys are read from environment variables or an in-memory UI field and are never written to reports.
+The five tools are `extract_core_claim`, `analyze_research_direction`, `build_evidence_queries`, `evaluate_claim_benchmark`, and `get_demo_report`. CI initializes the MCP server over stdio and calls every tool, including validation-error paths. Optional LLM configuration uses placeholders only: `OPENAI_BASE_URL`, `CLAIMSCOPE_GPT_API_KEY`, `CLAIMSCOPE_CLAUDE_API_KEY`, and provider-specific model variables. Keys are read from environment variables or an in-memory UI field and are never written to reports.
 
 The UI requires explicit consent before sending research directions to a configured LLM provider or generated search queries to public academic APIs. Full Discovery in the Web app always uses live academic retrieval; there is no synthetic Web result path. CLI and MCP users opt in by configuring environment variables or setting `online=true`; do not submit confidential research text to providers you do not trust.
 
@@ -120,7 +122,7 @@ Third-party files stay local under `.codex/`; the reproducible installer and gen
 ## Roadmap
 
 - Add opt-in full-text connectors with stronger provenance and license-aware caching.
-- Expand ClaimBench annotations and publish reproducible score reports.
+- Add a held-out fuzzy-direction benchmark with independently authored gold claims.
 - Improve configurable agent rubrics and reviewer feedback loops.
 - Add more export formats while preserving the public artifact contract.
 

@@ -491,6 +491,34 @@ def test_openai_client_requires_explicit_base_url(monkeypatch):
     assert OpenAICompatibleClient.from_env() is None
 
 
+def test_openai_client_reads_explicit_claude_profile_for_mcp(monkeypatch):
+    monkeypatch.setenv("CLAIMSCOPE_PROVIDER", "claude")
+    monkeypatch.setenv("CLAIMSCOPE_CLAUDE_API_KEY", "claude-test-key")
+    monkeypatch.setenv("CLAIMSCOPE_CLAUDE_MODEL", "claude-sonnet-test")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://provider.example/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    client = OpenAICompatibleClient.from_env()
+
+    assert client is not None
+    assert client.api_key == "claude-test-key"
+    assert client.model == "claude-sonnet-test"
+
+
+def test_openai_client_reads_explicit_gpt_profile_for_mcp(monkeypatch):
+    monkeypatch.setenv("CLAIMSCOPE_PROVIDER", "gpt")
+    monkeypatch.setenv("CLAIMSCOPE_GPT_API_KEY", "gpt-test-key")
+    monkeypatch.setenv("CLAIMSCOPE_GPT_MODEL", "gpt-test-model")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://provider.example/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    client = OpenAICompatibleClient.from_env()
+
+    assert client is not None
+    assert client.api_key == "gpt-test-key"
+    assert client.model == "gpt-test-model"
+
+
 class FakeLLMClient:
     def __init__(self, response: str):
         self.response = response
@@ -607,7 +635,18 @@ def test_strict_discovery_runs_six_role_arena_before_planning():
         "judge",
     }
     assert report.claim == StrictDiscoveryFakeLLM.claim.rstrip(".")
-    assert {event.role for event in streamed} == expected_roles
+    assert expected_roles <= {event.role for event in streamed}
+    assert {
+        "core_claim",
+        "evidence_retrieval",
+        "evidence_adjudication",
+        "opportunity_synthesis",
+        "quality_review",
+    } <= {event.stage for event in streamed}
+    retrieval_events = [
+        event for event in streamed if event.stage == "evidence_retrieval"
+    ]
+    assert [event.status for event in retrieval_events] == ["running", "complete"]
     assert expected_roles <= {event.role for event in report.events}
 
 

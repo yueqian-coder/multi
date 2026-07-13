@@ -633,6 +633,37 @@ def test_arena_bounds_proposer_concurrency_to_three_workers():
     assert client.max_active_proposers == 3
 
 
+def test_heuristic_parser_handles_cross_domain_effect_verbs_and_conditions():
+    HeuristicCoreClaimEngine = _load_core_claim_engine()
+    result = HeuristicCoreClaimEngine().run(
+        "Anonymous peer comparison feedback lowers household electricity use "
+        "relative to bill-only feedback during peak summer months"
+    )
+
+    candidate = result.selected_candidate
+    assert candidate is not None
+    assert candidate.method_or_mechanism == "Anonymous peer comparison feedback"
+    assert candidate.target_or_task == "household electricity use"
+    assert candidate.expected_effect == "lowers household electricity use"
+    assert candidate.conditions == ["peak summer months"]
+    assert candidate.confidence >= 0.8
+
+
+def test_heuristic_parser_separates_target_baseline_and_in_boundary():
+    HeuristicCoreClaimEngine = _load_core_claim_engine()
+    result = HeuristicCoreClaimEngine().run(
+        "Retrieval-grounded tutoring feedback increases delayed quiz scores "
+        "compared with generic hints in first-year programming assignments"
+    )
+
+    candidate = result.selected_candidate
+    assert candidate is not None
+    assert candidate.method_or_mechanism == "Retrieval-grounded tutoring feedback"
+    assert candidate.target_or_task == "delayed quiz scores"
+    assert candidate.expected_effect == "increases delayed quiz scores"
+    assert candidate.conditions == ["first-year programming assignments"]
+
+
 def test_llm_client_retries_transient_http_error_with_timeout(monkeypatch):
     module = importlib.import_module("claimscope.llm")
     calls = []

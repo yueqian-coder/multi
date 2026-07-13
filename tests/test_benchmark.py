@@ -77,6 +77,21 @@ def test_unsupported_certainty_receives_inspectable_overclaim_penalty():
     assert "overclaim_penalty" in overclaimed.to_dict()
 
 
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Error-map refinement improves Dice score versus a single-pass baseline",
+        "Progressive disclosure reduces time versus always-visible rationales",
+    ],
+)
+def test_overclaim_matching_does_not_penalize_substrings_or_baseline_names(claim):
+    benchmark = _load_benchmark_module()
+
+    score = benchmark.score_claim("research direction", make_result(claim))
+
+    assert score.overclaim_penalty == 0
+
+
 def test_case_required_concepts_and_forbidden_overclaims_change_total():
     benchmark = _load_benchmark_module()
     result = make_result(
@@ -190,6 +205,7 @@ def test_claimbench_dataset_has_stable_cross_domain_case_shape():
     assert len({case.id for case in cases}) == len(cases)
     assert all(case.required_concepts for case in cases)
     assert all(case.forbidden_overclaims for case in cases)
+    assert sum(bool(case.expected_slots) for case in cases) == 9
 
 
 def test_benchmark_report_contains_reproducible_case_results():
@@ -205,6 +221,38 @@ def test_benchmark_report_contains_reproducible_case_results():
     assert report.summary["aggregate_score"] > 0
     assert payload["case_results"][0]["score"]["components"]
     assert json.loads(json.dumps(payload)) == payload
+
+
+def test_benchmark_summary_exposes_diagnostics_and_truthful_metric_name():
+    benchmark = _load_benchmark_module()
+
+    report = benchmark.run_benchmark(
+        benchmark.load_cases(DATA_PATH), HeuristicCoreClaimEngine()
+    )
+    summary = report.summary
+
+    assert summary["metric_name"] == "structural_quality_score"
+    assert "not scientific truth accuracy" in summary["scoring_note"]
+    assert summary["evaluation_scope"] == "deterministic_parser_smoke_test"
+    assert 0 <= summary["structural_pass_rate"] <= 1
+    assert summary["structural_pass_count"] <= summary["case_count"]
+    assert 0 <= summary["exact_copy_rate"] <= 1
+    assert 0 <= summary["input_concept_leakage_rate"] <= 1
+    assert summary["annotated_slot_case_count"] == 9
+    assert 0 <= summary["annotated_slot_concept_accuracy"] <= 1
+    assert set(summary["annotated_slot_scores"]) == {
+        "conditions",
+        "method_or_mechanism",
+        "target_or_task",
+    }
+    assert 0 <= summary["target_comparator_contamination_rate"] <= 1
+    assert set(summary["domain_scores"]) == set(summary["domains"])
+    assert set(summary["component_means"]) >= {
+        "slot_coverage",
+        "falsifiability",
+        "specificity",
+    }
+    assert len(summary["lowest_case_ids"]) == 5
 
 
 def test_benchmark_cli_writes_json_report(tmp_path):

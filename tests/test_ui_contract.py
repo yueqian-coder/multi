@@ -203,6 +203,44 @@ def test_web_ui_streams_public_agent_progress_and_exposes_artifacts():
     assert "revision" in source
 
 
+def test_live_progress_keeps_all_six_roles_visible_after_first_event():
+    from app import ROLE_ORDER, render_live_progress
+
+    markup = render_live_progress(
+        {
+            "operationalizer": {
+                "role": "operationalizer",
+                "status": "running",
+                "public_summary": "Defining measurable variables.",
+                "duration_ms": 0,
+                "artifacts": {},
+            }
+        },
+        "en",
+    )
+
+    assert 'status-running' in markup
+    assert markup.count('class="activity-row"') == len(ROLE_ORDER)
+    assert "Waiting for this agent." in markup
+
+
+def test_result_provider_provenance_is_fixed_at_run_time():
+    from app import result_provider_context, stamp_run_context
+
+    result = stamp_run_context(
+        {"direction": "test"},
+        base_url="https://provider.example/v1",
+        model="model-at-run-time",
+        profile="gpt",
+    )
+
+    assert result_provider_context(result) == (
+        "gpt",
+        "model-at-run-time",
+        "provider.example",
+    )
+
+
 def test_web_discovery_always_uses_live_academic_retrieval():
     source = (ROOT / "app.py").read_text(encoding="utf-8")
 

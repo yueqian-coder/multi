@@ -92,6 +92,25 @@ def test_build_evidence_queries_payload_exposes_assumption_queries_without_retri
     assert json.loads(json.dumps(payload)) == payload
 
 
+@pytest.mark.parametrize(
+    ("function_name", "args", "message"),
+    [
+        ("extract_core_claim_payload", ("   ",), "direction must be non-empty"),
+        ("extract_core_claim_payload", ("direction", "invalid"), "mode must be"),
+        (
+            "analyze_research_direction_payload",
+            ("direction", False, 0),
+            "limit must be an integer between 1 and 50",
+        ),
+    ],
+)
+def test_mcp_payload_boundaries_reject_invalid_requests(function_name, args, message):
+    module = importlib.import_module("claimscope.mcp_server")
+
+    with pytest.raises(ValueError, match=message):
+        getattr(module, function_name)(*args)
+
+
 def test_benchmark_and_demo_payloads_are_json_compatible():
     module = importlib.import_module("claimscope.mcp_server")
 
@@ -160,3 +179,101 @@ def test_mcp_stdio_initialize_and_list_tools_smoke():
         "extract_core_claim",
         "get_demo_report",
     ]
+
+
+def test_mcp_stdio_calls_all_tools_and_reports_validation_errors():
+    script = textwrap.dedent(
+        """
+        import asyncio
+        import json
+        import sys
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        async def main():
+            params = StdioServerParameters(
+                command=sys.executable,
+                args=["-m", "claimscope.mcp_server"],
+                cwd=r"%s",
+            )
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    requests = {
+                        "extract_core_claim": {
+                            "direction": "RAG reduces unsupported answers versus closed-book QA",
+                            "mode": "heuristic",
+                        },
+                        "analyze_research_direction": {
+                            "direction": "RAG reduces unsupported answers",
+                            "online": False,
+                            "limit": 3,
+                        },
+                        "build_evidence_queries": {
+                            "direction": "RAG reduces unsupported answers",
+                            "mode": "heuristic",
+                        },
+                        "evaluate_claim_benchmark": {},
+                        "get_demo_report": {},
+                    }
+                    outputs = {}
+                    for name, arguments in requests.items():
+                        result = await session.call_tool(name, arguments)
+                        text = next(
+                            item.text for item in result.content if hasattr(item, "text")
+                        )
+                        outputs[name] = {
+                            "error": bool(result.isError),
+                            "payload": json.loads(text),
+                        }
+                    failure = await session.call_tool(
+                        "extract_core_claim",
+                        {"direction": " ", "mode": "heuristic"},
+                    )
+                    listed = await session.list_tools()
+                    schemas = {tool.name: tool.inputSchema for tool in listed.tools}
+                    print(json.dumps({
+                        "errors": {name: item["error"] for name, item in outputs.items()},
+                        "extract_claim": outputs["extract_core_claim"]["payload"]["selected_claim"],
+                        "extract_mode": outputs["extract_core_claim"]["payload"]["mode"],
+                        "paper_count": len(outputs["analyze_research_direction"]["payload"]["papers"]),
+                        "query_count": len(outputs["build_evidence_queries"]["payload"]["queries"]),
+                        "metric_name": outputs["evaluate_claim_benchmark"]["payload"]["summary"]["metric_name"],
+                        "demo_markdown": outputs["get_demo_report"]["payload"]["markdown"][:19],
+                        "failure_error": bool(failure.isError),
+                        "direction_min": schemas["extract_core_claim"]["properties"]["direction"].get("minLength"),
+                        "direction_max": schemas["extract_core_claim"]["properties"]["direction"].get("maxLength"),
+                        "mode_enum": schemas["extract_core_claim"]["properties"]["mode"].get("enum"),
+                        "limit_min": schemas["analyze_research_direction"]["properties"]["limit"].get("minimum"),
+                        "limit_max": schemas["analyze_research_direction"]["properties"]["limit"].get("maximum"),
+                    }))
+
+        asyncio.run(main())
+        """
+        % str(REPO_ROOT)
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        timeout=40,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(completed.stdout)
+    assert not any(payload["errors"].values())
+    assert payload["extract_claim"]
+    assert payload["extract_mode"] == "heuristic"
+    assert payload["paper_count"] == 3
+    assert payload["query_count"] >= 4
+    assert payload["metric_name"] == "structural_quality_score"
+    assert payload["demo_markdown"] == "# ClaimScope Report"
+    assert payload["failure_error"]
+    assert payload["direction_min"] == 1
+    assert payload["direction_max"] == 8000
+    assert payload["mode_enum"] == ["auto", "heuristic", "llm", "llm_strict"]
+    assert payload["limit_min"] == 1
+    assert payload["limit_max"] == 50

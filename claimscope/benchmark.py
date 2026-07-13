@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import json
 from json import JSONDecodeError
 from pathlib import Path
@@ -42,6 +42,7 @@ COMPARISON_MARKERS = (
     "ablation",
     "randomized",
     "held-out",
+    "than",
 )
 MEASUREMENT_MARKERS = (
     "accuracy",
@@ -67,6 +68,22 @@ MEASUREMENT_MARKERS = (
     "emissions",
     "retention",
     "completion",
+    "variance",
+    "temperature",
+    "strength",
+    "toughness",
+    "energy",
+    "power use",
+    "water use",
+    "electricity use",
+    "attendance",
+    "recommendations",
+    "abstention",
+    "validation",
+    "calibration",
+    "unsupported factual answers",
+    "unsupported answers",
+    "factuality",
     "time",
     "percent",
     "%",
@@ -80,9 +97,12 @@ BOUNDARY_MARKERS = (
     "during ",
     "held-out",
     "in ",
+    "on ",
+    "after ",
+    "while ",
+    "for ",
 )
 OVERCLAIM_MARKERS = (
-    "always",
     "guarantees",
     "proves",
     "eliminates all",
@@ -105,6 +125,7 @@ class BenchmarkCase:
     domain: str
     required_concepts: list[str]
     forbidden_overclaims: list[str]
+    expected_slots: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -141,6 +162,8 @@ class BenchmarkCaseResult:
     required_concepts_missing: list[str]
     forbidden_overclaims_found: list[str]
     mode: str
+    slot_grounding: dict[str, float]
+    target_comparator_contaminated: bool
 
     def to_dict(self) -> dict[str, object]:
         payload = asdict(self)
@@ -255,6 +278,15 @@ def run_benchmark(cases: list[BenchmarkCase], engine: object) -> BenchmarkReport
         claim = result.selected_claim
         found, missing = _concept_matches(claim, case.required_concepts)
         forbidden = _found_terms(claim, case.forbidden_overclaims)
+        slot_grounding = _slot_grounding(result, case)
+        target_comparator_contaminated = bool(
+            result.selected_candidate
+            and re.search(
+                _comparison_regex(),
+                result.selected_candidate.target_or_task,
+                re.IGNORECASE,
+            )
+        )
         case_results.append(
             BenchmarkCaseResult(
                 case_id=case.id,
@@ -266,15 +298,94 @@ def run_benchmark(cases: list[BenchmarkCase], engine: object) -> BenchmarkReport
                 required_concepts_missing=missing,
                 forbidden_overclaims_found=forbidden,
                 mode=getattr(result, "mode", ""),
+                slot_grounding=slot_grounding,
+                target_comparator_contaminated=target_comparator_contaminated,
             )
         )
     scores = [item.score.total for item in case_results]
+    pass_threshold = 70.0
+    passed = sum(score >= pass_threshold for score in scores)
+    component_names = [*COMPONENT_WEIGHTS, "required_concept_coverage"]
+    component_means = {
+        name: round(
+            mean(item.score.components.get(name, 0.0) for item in case_results),
+            3,
+        )
+        if case_results
+        else 0.0
+        for name in component_names
+    }
+    domain_scores = {}
+    for domain in sorted({item.domain for item in case_results}):
+        domain_values = [
+            item.score.total for item in case_results if item.domain == domain
+        ]
+        domain_scores[domain] = {
+            "case_count": len(domain_values),
+            "mean": round(mean(domain_values), 2),
+            "min": round(min(domain_values), 2),
+            "max": round(max(domain_values), 2),
+        }
+    lowest_cases = sorted(case_results, key=lambda item: item.score.total)[:5]
+    exact_copies = sum(
+        _normalized_copy(item.claim) == _normalized_copy(item.direction)
+        for item in case_results
+    )
+    input_concept_leakage = [
+        _required_concept_coverage(case.direction, case) for case in cases
+    ]
+    grounded_results = [item for item in case_results if item.slot_grounding]
+    slot_names = sorted(
+        {
+            name
+            for item in grounded_results
+            for name in item.slot_grounding
+            if name != "overall"
+        }
+    )
+    annotated_slot_scores = {
+        name: round(mean(item.slot_grounding[name] for item in grounded_results if name in item.slot_grounding), 3)
+        for name in slot_names
+    }
+    target_comparator_contamination = sum(
+        item.target_comparator_contaminated for item in case_results
+    )
     summary = {
+        "metric_name": "structural_quality_score",
+        "evaluation_scope": "deterministic_parser_smoke_test",
+        "scoring_note": (
+            "A deterministic claim-structure quality score; not scientific truth "
+            "accuracy or evidence correctness."
+        ),
         "case_count": len(case_results),
         "aggregate_score": round(mean(scores), 2) if scores else 0.0,
         "min_score": round(min(scores), 2) if scores else 0.0,
         "max_score": round(max(scores), 2) if scores else 0.0,
         "domains": sorted({item.domain for item in case_results}),
+        "domain_scores": domain_scores,
+        "component_means": component_means,
+        "structural_pass_threshold": pass_threshold,
+        "structural_pass_count": passed,
+        "structural_pass_rate": round(passed / len(scores), 3) if scores else 0.0,
+        "exact_copy_rate": (
+            round(exact_copies / len(case_results), 3) if case_results else 0.0
+        ),
+        "input_concept_leakage_rate": (
+            round(mean(input_concept_leakage), 3)
+            if input_concept_leakage
+            else 0.0
+        ),
+        "annotated_slot_case_count": len(grounded_results),
+        "annotated_slot_concept_accuracy": (
+            round(mean(item.slot_grounding["overall"] for item in grounded_results), 3)
+            if grounded_results
+            else None
+        ),
+        "annotated_slot_scores": annotated_slot_scores,
+        "target_comparator_contamination_rate": (
+            round(target_comparator_contamination / len(cases), 3) if cases else 0.0
+        ),
+        "lowest_case_ids": [item.case_id for item in lowest_cases],
         "engine": engine.__class__.__name__,
     }
     return BenchmarkReport(summary=summary, case_results=case_results)
@@ -294,12 +405,14 @@ def _payload_to_case(payload: object, *, line_number: int) -> BenchmarkCase:
     forbidden_overclaims = _required_text_list(
         payload, "forbidden_overclaims", line_number
     )
+    expected_slots = _optional_slot_map(payload, line_number)
     return BenchmarkCase(
         id=case_id,
         direction=direction,
         domain=domain,
         required_concepts=required_concepts,
         forbidden_overclaims=forbidden_overclaims,
+        expected_slots=expected_slots,
     )
 
 
@@ -324,6 +437,60 @@ def _required_text_list(
     if not items:
         raise ValueError(f"line {line_number}: {key} must be a non-empty list")
     return items
+
+
+def _optional_slot_map(
+    payload: dict[str, object], line_number: int
+) -> dict[str, list[str]]:
+    raw = payload.get("expected_slots")
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"line {line_number}: expected_slots must be an object")
+    allowed = {"method_or_mechanism", "target_or_task", "conditions"}
+    slots: dict[str, list[str]] = {}
+    for name, values in raw.items():
+        if name not in allowed:
+            raise ValueError(f"line {line_number}: unsupported expected slot {name!r}")
+        if not isinstance(values, list):
+            raise ValueError(f"line {line_number}: expected slot {name!r} must be a list")
+        terms = [
+            " ".join(value.split())
+            for value in values
+            if isinstance(value, str) and value.strip()
+        ]
+        if not terms:
+            raise ValueError(f"line {line_number}: expected slot {name!r} must not be empty")
+        slots[name] = terms
+    return slots
+
+
+def _slot_grounding(
+    result: CoreClaimResult,
+    case: BenchmarkCase,
+) -> dict[str, float]:
+    candidate = result.selected_candidate
+    if candidate is None or not case.expected_slots:
+        return {}
+    predicted = {
+        "method_or_mechanism": candidate.method_or_mechanism,
+        "target_or_task": candidate.target_or_task,
+        "conditions": " ".join(candidate.conditions),
+    }
+    scores = {
+        name: len(_found_terms(predicted.get(name, ""), terms)) / len(terms)
+        for name, terms in case.expected_slots.items()
+    }
+    scores["overall"] = mean(scores.values()) if scores else 0.0
+    return {name: round(value, 3) for name, value in scores.items()}
+
+
+def _comparison_regex() -> str:
+    return "|".join(
+        re.escape(marker.strip()).replace(r"\ ", r"\s+")
+        for marker in COMPARISON_MARKERS
+        if marker.strip()
+    )
 
 
 def _slot_coverage(result: CoreClaimResult) -> float:
@@ -357,7 +524,7 @@ def _declarative_form(claim: str) -> float:
 
 
 def _marker_score(text: str, markers: tuple[str, ...]) -> float:
-    matches = sum(1 for marker in markers if marker in text)
+    matches = sum(1 for marker in markers if _contains_marker(text, marker))
     if not matches:
         return 0.0
     return min(1.0, 0.55 + 0.15 * matches)
@@ -368,7 +535,7 @@ def _falsifiability(claim: str, result: CoreClaimResult) -> float:
     score = 0.0
     score += 0.30 * _marker_score(lower_claim, COMPARISON_MARKERS)
     score += 0.30 * _marker_score(lower_claim, MEASUREMENT_MARKERS)
-    if any(marker in lower_claim for marker in BOUNDARY_MARKERS):
+    if any(_contains_marker(lower_claim, marker) for marker in BOUNDARY_MARKERS):
         score += 0.20
     candidate = result.selected_candidate
     falsification_test = candidate.falsification_test if candidate else ""
@@ -393,7 +560,7 @@ def _specificity(direction: str, claim: str) -> float:
     score += min(0.35, len(claim_tokens) / 45)
     score += min(0.35, len(non_direction_tokens) / 18)
     lower_claim = claim.lower()
-    if any(marker in lower_claim for marker in BOUNDARY_MARKERS):
+    if any(_contains_marker(lower_claim, marker) for marker in BOUNDARY_MARKERS):
         score += 0.15
     if _marker_score(lower_claim, MEASUREMENT_MARKERS):
         score += 0.15
@@ -401,7 +568,15 @@ def _specificity(direction: str, claim: str) -> float:
 
 
 def _overclaim_penalty(lower_claim: str) -> float:
-    matches = [marker for marker in OVERCLAIM_MARKERS if marker in lower_claim]
+    matches = [
+        marker for marker in OVERCLAIM_MARKERS if _contains_marker(lower_claim, marker)
+    ]
+    if re.search(
+        r"\balways\s+(?:works?|improves?|reduces?|increases?|decreases?|"
+        r"outperforms?|succeeds?|accurate|correct|safe|effective|stable|factual)\b",
+        lower_claim,
+    ):
+        matches.append("always-claim")
     return min(35.0, 12.0 * len(matches))
 
 
@@ -426,7 +601,7 @@ def _cue_stuffing_penalty(lower_claim: str) -> float:
     cue_matches = sum(
         1
         for marker in COMPARISON_MARKERS + MEASUREMENT_MARKERS + BOUNDARY_MARKERS
-        if marker in lower_claim
+        if _contains_marker(lower_claim, marker)
     )
     if len(tokens) <= 24 or cue_matches < 8:
         return 0.0
@@ -443,8 +618,22 @@ def _concept_matches(claim: str, concepts: list[str]) -> tuple[list[str], list[s
 
 def _found_terms(claim: str, terms: list[str]) -> list[str]:
     lower_claim = claim.lower()
-    return [term for term in terms if term.lower() in lower_claim]
+    return [term for term in terms if _contains_marker(lower_claim, term.lower())]
 
 
 def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _contains_marker(text: str, marker: str) -> bool:
+    normalized = marker.strip()
+    if not normalized:
+        return False
+    if normalized == "%":
+        return "%" in text
+    pattern = re.escape(normalized).replace(r"\ ", r"\s+")
+    return bool(re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", text))
+
+
+def _normalized_copy(text: str) -> str:
+    return " ".join(_tokens(text))

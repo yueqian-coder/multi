@@ -368,6 +368,7 @@ def inject_style() -> None:
         .rail-provider { border-bottom:1px solid #344345; padding:13px 0; }
         .rail-provider span { display:block; color:#70c6be; font-size:10px; font-weight:700; }
         .rail-provider strong { display:block; font-size:11px; margin-top:3px; overflow-wrap:anywhere; }
+        .rail-provider small { display:block; color:#9fafb1; font-size:9px; margin-top:4px; overflow-wrap:anywhere; }
         .rail-agent-head { color:#91a3a3; font-size:10px; font-weight:700; margin:16px 0 7px; }
         .rail-agent { display:grid; grid-template-columns:8px 1fr; gap:8px; align-items:center; padding:7px 0; }
         .rail-agent-dot { width:6px; height:6px; border-radius:50%; background:#697778; }
@@ -533,6 +534,33 @@ def build_service() -> ClaimScopeService:
     api_key, base_url, model, _ = selected_provider_config()
     client = OpenAICompatibleClient(api_key=api_key, base_url=base_url, model=model)
     return ClaimScopeService(llm_client=client)
+
+
+def stamp_run_context(
+    result: dict,
+    *,
+    base_url: str,
+    model: str,
+    profile: str,
+) -> dict:
+    result["run_context"] = {
+        "provider": profile,
+        "model": model,
+        "host": provider_host(base_url),
+    }
+    return result
+
+
+def result_provider_context(result: dict) -> tuple[str, str, str]:
+    context = result.get("run_context")
+    if isinstance(context, dict):
+        profile = str(context.get("provider", "")).strip()
+        model = str(context.get("model", "")).strip()
+        host = str(context.get("host", "")).strip()
+        if profile and model:
+            return profile, model, host
+    _, base_url, model, profile = selected_provider_config()
+    return profile, model, provider_host(base_url)
 
 
 def provider_profile_label(profile: str, language: str) -> str:
@@ -710,7 +738,26 @@ def empty_state(title: str, detail: str) -> str:
 
 
 def render_live_progress(events: dict[str, dict], language: str) -> str:
-    ordered = [events[role] for role in ROLE_ORDER if role in events]
+    ordered = [
+        events.get(
+            role,
+            {
+                "role": role,
+                "status": "pending",
+                "public_summary": (
+                    "等待该智能体开始。" if language == "zh" else "Waiting for this agent."
+                ),
+                "duration_ms": 0,
+                "artifacts": {},
+            },
+        )
+        for role in ROLE_ORDER
+    ]
+    ordered.extend(
+        event
+        for key, event in events.items()
+        if key not in ROLE_ORDER
+    )
     status_by_role = {role: str(events.get(role, {}).get("status", "pending")) for role in ROLE_ORDER}
 
     def stage_status(roles: list[str]) -> str:
@@ -748,7 +795,7 @@ def render_run_rail(result: dict, language: str) -> None:
     candidates = result.get("candidates", [])
     unresolved = result.get("unresolved_ambiguities", [])
     events = {str(item.get("role", "")): item for item in result.get("events", [])}
-    _, _, model, profile = selected_provider_config()
+    profile, model, host = result_provider_context(result)
     event_markup = "".join(
         '<div class="rail-agent">'
         f'<span class="rail-agent-dot rail-agent-{escape(str(events.get(role, {}).get("status", "pending")))}"></span>'
@@ -766,7 +813,8 @@ def render_run_rail(result: dict, language: str) -> None:
         f'<div><strong>{len(candidates)}</strong><span>{escape(t(language, "candidate"))}</span></div>'
         f'<div><strong>{len(unresolved)}</strong><span>{escape(t(language, "open_slots"))}</span></div>'
         '</div>'
-        f'<div class="rail-provider"><span>{escape(provider_profile_label(profile, language))}</span><strong>{escape(model)}</strong></div>'
+        f'<div class="rail-provider"><span>{escape(provider_profile_label(profile, language))}</span><strong>{escape(model)}</strong>'
+        f'{f"<small>{escape(host)}</small>" if host else ""}</div>'
         f'<div class="rail-agent-head">{escape(t(language, "agent_activity"))}</div>'
         f'{event_markup}</aside>',
         unsafe_allow_html=True,
@@ -1137,11 +1185,18 @@ def main() -> None:
 
             progress_slot.markdown(render_live_progress(live_events, language), unsafe_allow_html=True)
             try:
+                _, base_url, model, profile = selected_provider_config()
                 service = build_service()
                 result = service.extract_core_claim(
                     direction,
                     mode="llm_strict",
                     on_event=on_agent_event,
+                )
+                stamp_run_context(
+                    result,
+                    base_url=base_url,
+                    model=model,
+                    profile=profile,
                 )
                 st.session_state["core_claim_result"] = result
                 save_result_snapshot(result)
@@ -1157,7 +1212,9 @@ def main() -> None:
             def on_discovery_agent_event(event: object) -> None:
                 payload = event.to_dict() if hasattr(event, "to_dict") else dict(event)
                 role = str(payload.get("role", "agent"))
-                live_events[role] = payload
+                stage = str(payload.get("stage", "workflow"))
+                key = role if role in ROLE_ORDER else f"stage:{stage}"
+                live_events[key] = payload
                 progress_slot.markdown(
                     render_live_progress(live_events, language),
                     unsafe_allow_html=True,
@@ -1168,14 +1225,22 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
             try:
+                _, base_url, model, profile = selected_provider_config()
                 service = build_service()
-                st.session_state["discovery_result"] = service.analyze_research_direction(
+                result = service.analyze_research_direction(
                     direction,
                     online=True,
                     limit=limit,
                     strict_agent=True,
                     on_event=on_discovery_agent_event,
                 )
+                stamp_run_context(
+                    result,
+                    base_url=base_url,
+                    model=model,
+                    profile=profile,
+                )
+                st.session_state["discovery_result"] = result
             except Exception:
                 st.error(t(language, "discovery_failed"))
             else:

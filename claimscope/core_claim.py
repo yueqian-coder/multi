@@ -10,6 +10,15 @@ from typing import Callable
 from .models import AgentEvent, ClaimCandidate, ClaimCritique, CoreClaimResult
 
 _EFFECT_VERBS = (
+    "change",
+    "changes",
+    "changed",
+    "detect",
+    "detects",
+    "detected",
+    "flag",
+    "flags",
+    "flagged",
     "improve",
     "improves",
     "improved",
@@ -28,8 +37,54 @@ _EFFECT_VERBS = (
     "help",
     "helps",
     "helped",
+    "identify",
+    "identifies",
+    "identified",
+    "lower",
+    "lowers",
+    "lowered",
+    "maintain",
+    "maintains",
+    "maintained",
+    "outperform",
+    "outperforms",
+    "outperformed",
+    "predict",
+    "predicts",
+    "predicted",
+    "preserve",
+    "preserves",
+    "preserved",
+    "raise",
+    "raises",
+    "raised",
+    "shorten",
+    "shortens",
+    "shortened",
 )
-_CONDITION_MARKERS = ("with", "under", "when", "if", "across", "during")
+_CONDITION_MARKERS = (
+    "with",
+    "under",
+    "when",
+    "if",
+    "across",
+    "during",
+    "on",
+    "in",
+    "after",
+    "while",
+)
+_COMPARISON_PATTERN = (
+    r"\b(versus|vs\.?|compared (?:with|to)|baseline|control|without|against|than|"
+    r"relative to)\b"
+)
+_METRIC_PATTERN = (
+    r"\b(accuracy|auc|f1|precision|recall|rate|score|error|latency|throughput|"
+    r"mortality|yield|cost|time|percent|metric|change|variance|temperature|strength|"
+    r"energy|power|attendance|recommendations?|abstention|validation|toughness|"
+    r"calibration|retention|completion|emissions?|water use|electricity use|power use|"
+    r"unsupported factual answers?|unsupported answers?|factuality)\b|%"
+)
 PROPOSER_ROLES = {
     "operationalizer": (
         "Turn the direction into measurable variables and a controlled comparison."
@@ -385,18 +440,9 @@ def _build_candidate(claim: str) -> ClaimCandidate:
         missing_information.append("target task or object")
     if not expected_effect:
         missing_information.append("measurable expected effect")
-    if not re.search(
-        r"\b(versus|vs\.?|compared (?:with|to)|baseline|control|without|against|than)\b",
-        claim,
-        re.IGNORECASE,
-    ):
+    if not re.search(_COMPARISON_PATTERN, claim, re.IGNORECASE):
         missing_information.append("comparison baseline")
-    if not re.search(
-        r"\b(accuracy|auc|f1|precision|recall|rate|score|error|latency|throughput|"
-        r"mortality|yield|cost|time|percent|metric|change)\b|%",
-        claim,
-        re.IGNORECASE,
-    ):
+    if not re.search(_METRIC_PATTERN, claim, re.IGNORECASE):
         missing_information.append("evaluation metric")
     if not conditions:
         missing_information.append("boundary conditions")
@@ -421,23 +467,23 @@ def _candidate_confidence(missing_information: list[str]) -> float:
 
 def _extract_method_or_mechanism(claim: str) -> str:
     cleaned = claim.strip()
-    match = re.match(r"(.+?)\b(for|on|in)\b\s+(.+)", cleaned, re.IGNORECASE)
-    if match and _looks_like_method(match.group(1)):
-        return match.group(1).strip()
     effect_match = _effect_match(cleaned)
     if effect_match:
         return effect_match.group(1).strip()
+    match = re.match(r"(.+?)\b(for|on|in)\b\s+(.+)", cleaned, re.IGNORECASE)
+    if match and _looks_like_method(match.group(1)):
+        return match.group(1).strip()
     return cleaned if _looks_like_method(cleaned) else ""
 
 
 def _extract_target_or_task(claim: str) -> str:
     cleaned = claim.strip()
-    match = re.match(r"(.+?)\b(for|on|in)\b\s+(.+)", cleaned, re.IGNORECASE)
-    if match and _looks_like_method(match.group(1)):
-        return _strip_conditions(match.group(3))
     effect_match = _effect_match(cleaned)
     if effect_match:
         return _strip_conditions(effect_match.group(3))
+    match = re.match(r"(.+?)\b(for|on|in)\b\s+(.+)", cleaned, re.IGNORECASE)
+    if match and _looks_like_method(match.group(1)):
+        return _strip_conditions(match.group(3))
     return ""
 
 
@@ -456,11 +502,13 @@ def _extract_conditions(claim: str) -> list[str]:
         match = _condition_marker_match(claim, marker)
         if match is None:
             continue
+        if not _valid_condition_match(claim, marker, match):
+            continue
         prefix = claim[: match.start()]
         suffix = claim[match.end() :]
         if _looks_like_method(prefix):
             conditions.append(suffix.strip())
-    return conditions
+    return list(dict.fromkeys(condition for condition in conditions if condition))
 
 
 def _effect_match(claim: str) -> re.Match[str] | None:
@@ -471,16 +519,40 @@ def _effect_match(claim: str) -> re.Match[str] | None:
 
 def _strip_conditions(text: str) -> str:
     stripped = text.strip()
+    matches: list[re.Match[str]] = []
+    comparison = re.search(_COMPARISON_PATTERN, stripped, re.IGNORECASE)
+    if comparison is not None:
+        matches.append(comparison)
     for marker in _CONDITION_MARKERS:
         match = _condition_marker_match(stripped, marker)
-        if match is None:
+        if match is None or not _valid_condition_match(stripped, marker, match):
             continue
-        return stripped[: match.start()].strip()
+        matches.append(match)
+    if matches:
+        first = min(matches, key=lambda item: item.start())
+        return stripped[: first.start()].strip()
     return stripped
 
 
 def _condition_marker_match(text: str, marker: str) -> re.Match[str] | None:
     return re.search(rf"\s{re.escape(marker)}\s", text, re.IGNORECASE)
+
+
+def _valid_condition_match(
+    text: str,
+    marker: str,
+    match: re.Match[str],
+) -> bool:
+    prefix = text[: match.start()]
+    suffix = text[match.end() :].lstrip().lower()
+    if marker == "in":
+        return re.search(_COMPARISON_PATTERN, prefix, re.IGNORECASE) is not None
+    if marker == "with":
+        if re.search(r"\bcompared\s*$", prefix, re.IGNORECASE):
+            return False
+        if suffix.startswith(("higher ", "lower ")):
+            return False
+    return True
 
 
 def _looks_like_method(text: str) -> bool:
