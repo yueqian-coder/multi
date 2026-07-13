@@ -169,6 +169,8 @@ def main() -> None:
                 if name == "desktop":
                     audit_provider_profiles(page)
                     audit_result_views(page)
+                    page.reload(wait_until="domcontentloaded", timeout=60_000)
+                    page.get_by_text("ClaimScope", exact=True).wait_for(timeout=60_000)
                 stabilize_frame(page)
                 page.screenshot(
                     path=ASSETS / f"{SCREENSHOT_PREFIX}-{name}.png",
