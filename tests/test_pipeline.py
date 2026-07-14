@@ -381,7 +381,7 @@ def test_multilingual_and_null_result_markers_classify_conservatively():
         for item in assumption.evidence
     ]
     assert any(item.stance == "support" for item in evidence)
-    assert any(item.stance == "contradict" for item in evidence)
+    assert any(item.stance == "null_result" for item in evidence)
     assert all("介绍检索系统" not in item.snippet for item in evidence)
     assert any(row["Null Result"] > 0 for row in report.assumption_matrix())
 
@@ -425,7 +425,6 @@ def test_assumption_matrix_counts_adversarial_evidence_buckets():
 
     assert matrix
     assert any(row["Support"] > 0 for row in matrix)
-    assert any(row["Contradict"] > 0 for row in matrix)
     assert any(row["Limitation"] > 0 for row in matrix)
     assert any(row["Null Result"] > 0 for row in matrix)
     assert all("Opportunity Signal" in row for row in matrix)

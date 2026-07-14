@@ -48,9 +48,32 @@ def split_sentences(text: str) -> list[str]:
 
 
 def keywords(text: str, limit: int = 8) -> list[str]:
-    tokens = re.findall(r"[A-Za-z][A-Za-z0-9\-]+|[\u4e00-\u9fff]{2,}", text.lower())
+    tokens = retrieval_tokens(text)
     counts = Counter(token for token in tokens if token not in STOPWORDS and len(token) > 1)
     return [token for token, _ in counts.most_common(limit)]
+
+
+def retrieval_tokens(text: str) -> list[str]:
+    """Tokenize text for deterministic lexical retrieval.
+
+    English terms stay intact while Chinese runs contribute both the full run and
+    character bigrams. The latter keeps fuzzy Chinese directions searchable without
+    introducing a heavyweight tokenizer into the core package.
+    """
+
+    raw_tokens = re.findall(
+        r"[A-Za-z][A-Za-z0-9\-]+|\d+(?:\.\d+)?|[\u4e00-\u9fff]+",
+        (text or "").lower(),
+    )
+    tokens: list[str] = []
+    for token in raw_tokens:
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            tokens.append(token)
+            if len(token) > 2:
+                tokens.extend(token[index : index + 2] for index in range(len(token) - 1))
+        else:
+            tokens.append(token)
+    return [token for token in tokens if token not in STOPWORDS]
 
 
 def overlap_score(left: str, right: str) -> float:

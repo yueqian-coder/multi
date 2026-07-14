@@ -433,8 +433,10 @@ def _evidence_counts(evidence: list[EvidenceItem]) -> dict[str, int]:
             counts["contradict"] += 1
         elif item.stance == "limit":
             counts["limitation"] += 1
+        elif item.stance == "null_result":
+            counts["null_result"] += 1
         lower = item.snippet.lower()
-        if any(
+        if item.stance != "null_result" and any(
             marker in lower
             for marker in [
                 "no consistent",
@@ -456,7 +458,9 @@ def _evidence_counts(evidence: list[EvidenceItem]) -> dict[str, int]:
 
 
 def _opportunity_signal(status: str, counts: dict[str, int]) -> str:
-    if counts["support"] and (counts["contradict"] or counts["limitation"]):
+    if counts["support"] and (
+        counts["contradict"] or counts["limitation"] or counts["null_result"]
+    ):
         return "high: contested boundary"
     if status == "unknown":
         return "medium: untested assumption"

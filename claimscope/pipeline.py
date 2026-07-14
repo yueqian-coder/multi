@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import time
 
 from .core_claim import AgentEventCallback
+from .evidence import classify_evidence_stance
 from .models import (
     AgentEvent,
     AnalysisReport,
@@ -467,13 +468,17 @@ def _build_assumptions(
         support = sum(1 for item in evidence if item.stance == "support")
         contradict = sum(1 for item in evidence if item.stance == "contradict")
         limitations = sum(1 for item in evidence if item.stance == "limit")
-        if support and (contradict or limitations):
+        null_results = sum(1 for item in evidence if item.stance == "null_result")
+        if support and (contradict or limitations or null_results):
             status = "mixed"
             risk = "high"
         elif support:
             status = "supported"
             risk = "medium"
         elif contradict:
+            status = "unsupported"
+            risk = "high"
+        elif null_results:
             status = "unsupported"
             risk = "high"
         elif limitations:
@@ -511,8 +516,12 @@ def _collect_evidence(
         claim_terms.update(keywords(query, 12))
     candidates: list[EvidenceItem] = []
     for paper in papers:
-        for sentence in split_sentences(paper.abstract):
-            combined_text = f"{paper.title} {sentence}"
+        sentences = split_sentences(paper.abstract)
+        for index, sentence in enumerate(sentences):
+            local_context = " ".join(
+                sentences[max(0, index - 1) : min(len(sentences), index + 2)]
+            )
+            combined_text = f"{paper.title} {local_context}"
             query_matches = [
                 (overlap_score(query, combined_text), query, query_kind)
                 for query, query_kind in zip(queries, query_kinds)
@@ -717,10 +726,13 @@ def _negative_evidence_score(finding: NegativeEvidence) -> int:
 
 
 def _sentence_stance(sentence: str) -> str:
+    stance = classify_evidence_stance(sentence)
+    if stance != "mention":
+        return stance
     lower = sentence.lower()
+    if _contains_any(lower, NULL_RESULT_MARKERS):
+        return "null_result"
     if _contains_any(lower, NEGATIVE_MARKERS):
-        if _contains_any(lower, NULL_RESULT_MARKERS):
-            return "contradict"
         return "limit"
     if _contains_any(lower, SUPPORT_MARKERS):
         return "support"

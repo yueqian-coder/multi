@@ -5,6 +5,11 @@ import sys
 from pathlib import Path
 
 from .benchmark import load_cases, run_benchmark
+from .external_benchmark import (
+    DEFAULT_DATASETS,
+    LLMBenchmarkAdjudicator,
+    run_external_benchmark,
+)
 from .core_claim import HeuristicCoreClaimEngine
 from .pipeline import ClaimScopePipeline
 from .planner import HeuristicClaimPlanner, LLMClaimPlanner
@@ -17,6 +22,9 @@ DEFAULT_BENCHMARK_DATA = Path(__file__).with_name("data") / "claimbench.jsonl"
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "external-benchmark":
+        _run_external_benchmark_cli(sys.argv[2:])
+        return
     if (
         len(sys.argv) > 1
         and sys.argv[1] == "benchmark"
@@ -113,6 +121,85 @@ def _run_benchmark_cli(argv: list[str]) -> None:
         f"aggregate score {summary['aggregate_score']} "
         f"({summary['engine']})"
     )
+
+
+def _run_external_benchmark_cli(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(
+        description="Run task-specific evaluations on six public research datasets."
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("outputs/external-benchmarks/data"),
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        choices=DEFAULT_DATASETS,
+        default=list(DEFAULT_DATASETS),
+    )
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        help="Deterministically sample at most this many cases per dataset.",
+    )
+    parser.add_argument(
+        "--planner",
+        choices=["heuristic", "llm"],
+        default="heuristic",
+        help="Planner used for CLAIMDECOMP and LIMITGEN transfer tests.",
+    )
+    parser.add_argument(
+        "--adjudicator",
+        choices=["heuristic", "llm"],
+        default="heuristic",
+        help="Classifier used for gold-evidence stance and effect labels.",
+    )
+    parser.add_argument(
+        "--retriever",
+        choices=["bm25", "tfidf", "hybrid-tfidf", "dense", "hybrid-dense"],
+        default="bm25",
+        help="Retriever for SciFact-Open and LitSearch document ranking.",
+    )
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args(argv)
+    planner = HeuristicClaimPlanner()
+    adjudicator = None
+    engine = f"heuristic+{args.retriever}"
+    if args.planner == "llm" or args.adjudicator == "llm":
+        client = OpenAICompatibleClient.from_env()
+        if client is None:
+            parser.error(
+                "LLM evaluation requires an API key, OPENAI_BASE_URL, and provider model environment variables."
+            )
+        if args.planner == "llm":
+            planner = LLMClaimPlanner(llm_client=client)
+        if args.adjudicator == "llm":
+            adjudicator = LLMBenchmarkAdjudicator(client)
+        engine = f"{client.model}+{args.retriever}"
+    report = run_external_benchmark(
+        args.data_dir,
+        datasets=args.datasets,
+        max_cases=args.max_cases,
+        planner=planner,
+        adjudicator=adjudicator,
+        retrieval_engine=args.retriever,
+        engine=engine,
+    )
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report.to_json(), encoding="utf-8")
+    summary = report.to_dict()["summary"]
+    print(
+        "External benchmark: "
+        f"{summary['evaluated']} evaluated, {summary['partial']} partial, "
+        f"{summary['unavailable']} unavailable."
+    )
+    for result in report.datasets:
+        print(
+            f"- {result.dataset}: {result.status} "
+            f"({result.case_count} cases) {result.metrics}"
+        )
 
 
 if __name__ == "__main__":

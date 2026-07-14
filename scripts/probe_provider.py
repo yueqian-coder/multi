@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -24,8 +25,16 @@ def main() -> None:
         action="store_true",
         help="List model IDs before probing them.",
     )
+    parser.add_argument(
+        "--api-key-env",
+        help="Read the key from this environment variable instead of prompting.",
+    )
     args = parser.parse_args()
-    api_key = getpass.getpass("API key: ").strip()
+    api_key = (
+        os.getenv(args.api_key_env, "").strip()
+        if args.api_key_env
+        else getpass.getpass("API key: ").strip()
+    )
     if not api_key:
         raise SystemExit("No API key provided.")
 

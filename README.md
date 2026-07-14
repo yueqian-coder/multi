@@ -46,6 +46,18 @@ The current heuristic baseline scores `81.15/100`; all 27 cases clear the struct
 
 These are regression signals, not fuzzy-direction or scientific accuracy. The current set contains already normalized claims: exact input-copy rate and input-concept leakage are both `100%`. The JSON report publishes those caveats, per-domain scores, component means, and the lowest-scoring cases.
 
+## External Evaluation
+
+Six public datasets now test different links in the real workflow: SciFact-Open, Evidence Inference 2.0, NLI4CT, LimitGen, CLAIMDECOMP, and LitSearch. The harness reports retrieval, evidence selection, NLI/effect inference, limitation coverage, and decomposition separately; it intentionally publishes no aggregate "research accuracy" score.
+
+```bash
+python -m pip install -e ".[benchmark]"
+python scripts/prepare_external_benchmarks.py
+python -m claimscope.cli external-benchmark --max-cases 100 --retriever hybrid-tfidf
+```
+
+The full diagnostic found the largest gaps in scientific retrieval recall, structured evidence selection, and specific limitation discovery. It also produced concrete improvements: cached BM25 + E5 fusion raised SciFact candidate-pool Recall@20 from `0.5548` to `0.6250`, and LitSearch gold-union Recall@20 from `0.8883` to `0.9296`; local evidence context raised NLI4CT Recall@5 from `0.3226` to `0.3929` on the controlled 100-case comparison. See the [evaluation protocol, full caveats, and training decision](docs/external-evaluation.md).
+
 ## MCP
 
 ```bash
@@ -87,7 +99,7 @@ flowchart LR
     E --> O["Bounded idea opportunities"]
 ```
 
-`claimscope.models` defines typed artifacts. `core_claim` and `planner` create claims; `pipeline` coordinates the assumption/evidence workflow; `retrievers` provide offline fixtures or optional public sources; `service` provides JSON-compatible boundaries; `cli`, Streamlit, and `mcp_server` are transports. Public trace events contain role, status, duration, artifacts, and scores, not private reasoning.
+`claimscope.models` defines typed artifacts. `core_claim` and `planner` create claims; `pipeline` coordinates the assumption/evidence workflow; `retrievers` provide BM25, TF-IDF, cached pretrained embeddings, rank fusion, and optional public sources; `evidence` keeps support, contradiction, limitation, and null results distinct; `service` provides JSON-compatible boundaries; `cli`, Streamlit, and `mcp_server` are transports. Public trace events contain role, status, duration, artifacts, and scores, not private reasoning.
 
 Detailed diagrams, module contracts, and failure behavior are documented in [System Architecture](docs/architecture.md). The course-oriented experiment record is available in [Experiment Report](docs/course-report.md), with a reproducible [60-second demo script](docs/demo-script.md).
 
@@ -118,11 +130,13 @@ Third-party files stay local under `.codex/`; the reproducible installer and gen
 - Strict Web agent runs depend on a configured endpoint and fail visibly instead of degrading to heuristics.
 - CLI and MCP retain explicit heuristic modes for offline regression and testing.
 - ClaimBench is a smoke benchmark, not a claim of general research-agent quality.
+- Public external datasets cover individual stages, but no current dataset directly labels the full scientific direction-to-hidden-assumption workflow.
 
 ## Roadmap
 
 - Add opt-in full-text connectors with stronger provenance and license-aware caching.
-- Add a held-out fuzzy-direction benchmark with independently authored gold claims.
+- Collect an expert-reviewed scientific direction-to-assumption benchmark before fine-tuning decomposition.
+- Add a full-corpus scientific reranker and calibrated non-agent NLI baseline.
 - Improve configurable agent rubrics and reviewer feedback loops.
 - Add more export formats while preserving the public artifact contract.
 

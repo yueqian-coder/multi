@@ -24,6 +24,8 @@ classifiers = [
 web = ["streamlit>=1.36"]
 mcp = ["mcp>=1.27,<2"]
 dev = ["pytest>=7.4"]
+benchmark = ["duckdb>=1.4", "scikit-learn>=1.4"]
+semantic = ["sentence-transformers>=3.0"]
 
 [project.scripts]
 claimscope = "claimscope.cli:main"
@@ -39,3 +41,6 @@ include = ["claimscope*"]
 
 [tool.setuptools.package-data]
 claimscope = ["data/*.jsonl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

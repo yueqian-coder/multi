@@ -27,7 +27,7 @@ DEFAULT_GPT_MODEL = "gpt-5.4-mini"
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5"
 DEFAULT_MODEL = DEFAULT_GPT_MODEL
 PROVIDER_OPTIONS = ["gpt", "claude", "custom"]
-GPT_MODELS = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5"]
+GPT_MODELS = ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5", "gpt-5.6-sol"]
 CLAUDE_MODELS = [
     "claude-sonnet-4-5",
     "claude-sonnet-4-6",
